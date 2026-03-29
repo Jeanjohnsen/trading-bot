@@ -28,6 +28,9 @@ class ScannerService:
         risk_state: RiskState,
         risk_engine: RiskEngine,
     ) -> list[OpportunityCandidate]:
+        if not quotes:
+            return []
+
         risk_cfg = self.runtime_config.get("risk", {})
         fee_rate = float(risk_cfg.get("fee_rate", 0.0))
         slippage_buffer = float(risk_cfg.get("slippage_tolerance", 0.01))

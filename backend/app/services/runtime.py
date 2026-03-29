@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import UTC, date, datetime
+import logging
 
 from app.agents.claude_client import ClaudeClient
 from app.agents.claude_explainer_agent import ClaudeExplainerAgent
@@ -15,6 +16,7 @@ from app.analytics.sharpe import sharpe_ratio
 from app.core.settings import Settings
 from app.domain.models import (
     AgentNote,
+    AppMode,
     DashboardSummary,
     ExecutionIntent,
     MarketQuote,
@@ -36,6 +38,8 @@ from app.risk.validate_risk import RiskEngine, RiskState
 from app.services.demo_data import build_demo_books, build_demo_quotes
 from app.services.scanner import ScannerService
 from app.storage.repositories import Repository
+
+logger = logging.getLogger(__name__)
 
 
 class TradingRuntime:
@@ -62,6 +66,8 @@ class TradingRuntime:
         self.positions: list[PositionSummary] = []
         self.orders: list[OrderReport] = []
         self.agent_notes: list[AgentNote] = []
+        self.current_mode: AppMode = settings.app_mode
+        self.using_demo_data: bool = False
         self.last_scan_at: datetime | None = None
         self.bankroll: float = 10_000.0
         self.equity_curve: list[float] = [10_000.0]
@@ -94,15 +100,38 @@ class TradingRuntime:
             active_executions=0,
         )
 
+    def _sync_claude_runtime_access(self) -> None:
+        if self.using_demo_data:
+            self.claude_client.set_runtime_access(
+                allowed=False,
+                state="disabled_demo_mode",
+                message="Claude is disabled while demo/bootstrap market data is active.",
+            )
+        else:
+            self.claude_client.set_runtime_access(
+                allowed=True,
+                state=None,
+                message=None,
+            )
+
     async def _load_market_data(self) -> tuple[list[MarketQuote], dict]:
         try:
             quotes = await self.polymarket_client.fetch_markets(max_markets=int(self.runtime_config.get("scanner", {}).get("max_markets", 80)))
             books = await self.polymarket_client.fetch_orderbooks(quotes[:20]) if quotes else {}
             if quotes:
+                self.using_demo_data = False
+                self._sync_claude_runtime_access()
                 return quotes, books
-        except Exception:
-            pass
-        return build_demo_quotes(), build_demo_books()
+        except Exception as exc:
+            logger.warning("live market load failed", extra={"event": "market_load_failed", "error_message": str(exc)})
+        if self.settings.bootstrap_demo_data:
+            logger.info("using demo market data fallback", extra={"event": "demo_data_fallback"})
+            self.using_demo_data = True
+            self._sync_claude_runtime_access()
+            return build_demo_quotes(), build_demo_books()
+        self.using_demo_data = False
+        self._sync_claude_runtime_access()
+        return [], {}
 
     async def scan_once(self) -> None:
         self.quotes, self.books = await self._load_market_data()
@@ -114,7 +143,7 @@ class TradingRuntime:
         self.opportunities = self.scanner.scan(
             quotes=self.quotes,
             books=self.books,
-            mode=self.settings.app_mode,
+            mode=self.current_mode,
             risk_state=self._risk_state(),
             risk_engine=risk_engine,
         )
@@ -152,7 +181,7 @@ class TradingRuntime:
         intent = ExecutionIntent(
             opportunity_id=opportunity.opportunity_id,
             market_id=opportunity.market_id,
-            mode=self.settings.app_mode,
+            mode=self.current_mode,
             legs=[
                 OrderLeg(outcome="yes", side="buy", price=quote.yes_ask or quote.yes_price, quantity=quantity, token_id=quote.yes_token_id),
                 OrderLeg(outcome="no", side="buy", price=quote.no_ask or quote.no_price, quantity=quantity, token_id=quote.no_token_id),
@@ -210,13 +239,54 @@ class TradingRuntime:
         )
         return {"active": self.kill_switch.is_active()}
 
+    async def set_app_mode(self, mode: AppMode, actor: str = "dashboard") -> dict:
+        previous_mode = self.current_mode
+        self.current_mode = mode
+        self.runtime_config.setdefault("app", {})
+        self.runtime_config["app"]["mode"] = mode.value
+        if previous_mode != mode:
+            self.repository.save_config_change(actor=actor, key="app.mode", previous_value=previous_mode.value, new_value=mode.value)
+            await self.notifications.dispatch(
+                NotificationMessage(
+                    level=NotificationLevel.WARNING if mode is AppMode.LIVE else NotificationLevel.INFO,
+                    title="App mode changed",
+                    body=f"Application mode changed from {previous_mode.value} to {mode.value}.",
+                )
+            )
+            await self.scan_once()
+        return {
+            "mode": self.current_mode.value,
+            "live_execution_enabled": self.settings.enable_live_trading,
+        }
+
+    async def set_claude_agent_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
+        previous_enabled = self.claude_client.operator_enabled
+        self.claude_client.set_operator_enabled(enabled)
+        if previous_enabled != enabled:
+            self.repository.save_config_change(
+                actor=actor,
+                key="claude.agent_enabled",
+                previous_value=str(previous_enabled).lower(),
+                new_value=str(enabled).lower(),
+            )
+            await self.notifications.dispatch(
+                NotificationMessage(
+                    level=NotificationLevel.INFO,
+                    title="Claude agent changed",
+                    body=f"Claude agent runtime toggle changed from {previous_enabled} to {enabled}.",
+                )
+            )
+        return self.claude_client.connection_status()
+
     def get_health(self) -> dict:
         return {
             "status": "ok",
-            "mode": self.settings.app_mode.value,
+            "mode": self.current_mode.value,
             "last_scan_at": self.last_scan_at,
+            "using_demo_data": self.using_demo_data,
             "kill_switch": self.kill_switch.is_active(),
             "claude_enabled": self.claude_client.enabled,
+            "claude": self.claude_client.connection_status(),
         }
 
     def get_overview(self) -> DashboardSummary:
@@ -228,7 +298,7 @@ class TradingRuntime:
             active_positions=sum(1 for item in self.positions if item.state != PositionState.CLOSED),
             blocked_trades=blocked,
             kill_switch=self.kill_switch.is_active(),
-            mode=self.settings.app_mode,
+            mode=self.current_mode,
             concurrent_positions=sum(1 for item in self.positions if item.state != PositionState.CLOSED),
         )
 
@@ -270,6 +340,7 @@ class TradingRuntime:
         return {
             "summary": summary,
             "notes": [note.model_dump(mode="json") for note in self.agent_notes] or self.repository.latest_agent_notes(),
+            "claude": self.claude_client.connection_status(),
         }
 
     def get_postmortems(self) -> list[dict]:
@@ -295,11 +366,16 @@ class TradingRuntime:
             "app": self.runtime_config.get("app", {}),
             "scanner": self.runtime_config.get("scanner", {}),
             "risk": self.runtime_config.get("risk", {}),
+            "current_mode": self.current_mode.value,
+            "using_demo_data": self.using_demo_data,
+            "available_modes": [mode.value for mode in AppMode],
             "preset_files": ["all", "weather", "crypto", "finance", "politics", "sports"],
             "secrets": {
                 "polymarket_relayer_key_present": bool(self.settings.polymarket_relayer_api_key),
                 "claude_key_present": bool(self.settings.anthropic_api_key),
+                "claude_agent_default": self.settings.enable_claude_agent,
             },
+            "claude": self.claude_client.connection_status(),
         }
 
     async def manual_refresh(self) -> dict:

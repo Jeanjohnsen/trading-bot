@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./storage/poly_arb_agent.db", alias="DATABASE_URL")
 
     bootstrap_demo_data: bool = Field(default=True, alias="BOOTSTRAP_DEMO_DATA")
+    enable_claude_agent: bool = Field(default=True, alias="ENABLE_CLAUDE_AGENT")
     enable_research_mode: bool = Field(default=False, alias="ENABLE_RESEARCH_MODE")
     enable_live_trading: bool = Field(default=False, alias="ENABLE_LIVE_TRADING")
     enable_market_orders: bool = Field(default=False, alias="ENABLE_MARKET_ORDERS")
@@ -86,6 +87,7 @@ class Settings(BaseSettings):
                 "mode": self.app_mode.value,
                 "base_url": self.app_base_url,
                 "bootstrap_demo_data": self.bootstrap_demo_data,
+                "enable_claude_agent": self.enable_claude_agent,
                 "enable_research_mode": self.enable_research_mode,
                 "enable_live_trading": self.enable_live_trading,
                 "enable_market_orders": self.enable_market_orders,
@@ -104,4 +106,3 @@ def get_settings() -> Settings:
     settings = Settings()
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     return settings
-

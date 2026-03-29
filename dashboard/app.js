@@ -47,10 +47,11 @@ function statusClass(status) {
 function renderOverview() {
   const overview = state.payloads.health ? state.payloads.overview : null;
   const analytics = state.payloads.analytics || {};
+  const claude = state.payloads.health?.claude || {};
   if (!overview) return;
 
   const cards = [
-    ["Bankroll", formatMoney(overview.bankroll), `Mode ${overview.mode}`],
+    ["Bankroll", formatMoney(overview.bankroll), `Mode ${overview.mode}${state.payloads.health?.using_demo_data ? " • demo data" : ""}`],
     ["Realized PnL", formatMoney(overview.realized_pnl), "Closed and booked"],
     ["Unrealized PnL", formatMoney(overview.unrealized_pnl), "Open exposure"],
     ["Active Positions", `${overview.active_positions}`, `${overview.concurrent_positions} concurrent`],
@@ -70,7 +71,7 @@ function renderOverview() {
     )
     .join("");
 
-  byId("mode-chip").textContent = `Mode: ${overview.mode}`;
+  byId("mode-chip").textContent = `Mode: ${overview.mode} • Claude: ${claude.state || "idle"}`;
 }
 
 function renderOpportunities() {
@@ -198,9 +199,18 @@ function renderRisk() {
 }
 
 function renderAgent() {
-  const agent = state.payloads.agent || { notes: [], summary: "" };
+  const agent = state.payloads.agent || { notes: [], summary: "", claude: {} };
+  const claude = agent.claude || {};
   byId("agent-panel").innerHTML = `
     <div class="stack">
+      <div class="detail-block">
+        <div class="eyebrow">Claude status</div>
+        <div class="detail-row"><span>State</span><strong>${claude.state || "unknown"}</strong></div>
+        <div class="detail-row"><span>Model</span><strong>${claude.model || "N/A"}</strong></div>
+        <p class="detail-copy">${claude.message || "No Claude status yet."}</p>
+        ${claude.error?.body ? `<p class="detail-copy">API detail: ${claude.error.body}</p>` : ""}
+        ${claude.error?.message ? `<p class="detail-copy">Transport detail: ${claude.error.message}</p>` : ""}
+      </div>
       <div class="detail-block">
         <div class="eyebrow">Daily recap</div>
         <p class="detail-copy">${agent.summary || "No summary yet."}</p>
@@ -228,25 +238,63 @@ function renderAgent() {
 
 function renderSettings() {
   const settings = state.payloads.settings || {};
+  const claude = settings.claude || {};
   byId("settings-panel").innerHTML = `
     <div class="stack">
       <div class="detail-block">
         <div class="setting-line"><span>Live trading enabled</span><strong>${settings.app?.enable_live_trading ? "Yes" : "No"}</strong></div>
         <div class="setting-line"><span>Research mode</span><strong>${settings.app?.enable_research_mode ? "On" : "Off"}</strong></div>
+        <div class="setting-line"><span>Demo data active</span><strong>${settings.using_demo_data ? "Yes" : "No"}</strong></div>
         <div class="setting-line"><span>Refresh</span><strong>${settings.scanner?.refresh_seconds || 0}s</strong></div>
         <div class="setting-line"><span>Min net edge</span><strong>${formatPercent(settings.risk?.min_net_edge || 0)}</strong></div>
+      </div>
+      <div class="detail-block">
+        <div class="eyebrow">App mode</div>
+        <div class="setting-line"><span>Current mode</span><strong>${settings.current_mode || settings.app?.mode || "unknown"}</strong></div>
+        <select class="mode-select" id="app-mode-select">
+          ${(settings.available_modes || []).map((mode) => `<option value="${mode}" ${mode === (settings.current_mode || settings.app?.mode) ? "selected" : ""}>${mode}</option>`).join("")}
+        </select>
+        <button class="action-button" id="save-mode-button" style="margin-top:0.8rem;">Apply mode</button>
+        ${
+          settings.current_mode === "live" && settings.app?.enable_live_trading !== true
+            ? `<p class="detail-copy" style="margin-top:0.7rem;">Live mode is selected, but live execution is still blocked until ENABLE_LIVE_TRADING=true.</p>`
+            : ""
+        }
       </div>
       <div class="detail-block">
         <div class="eyebrow">Presets</div>
         <div class="pill-row">${(settings.preset_files || []).map((preset) => `<span class="pill">${preset}</span>`).join("")}</div>
       </div>
       <div class="detail-block">
-        <div class="eyebrow">Secrets</div>
-        <div class="setting-line"><span>Claude API</span><strong>${settings.secrets?.claude_key_present ? "Configured" : "Missing"}</strong></div>
+        <div class="eyebrow">Claude</div>
+        <div class="setting-line"><span>API key</span><strong>${settings.secrets?.claude_key_present ? "Configured" : "Missing"}</strong></div>
+        <div class="setting-line"><span>Default flag</span><strong>${settings.secrets?.claude_agent_default ? "Enabled" : "Disabled"}</strong></div>
+        <div class="setting-line"><span>Runtime toggle</span><strong>${claude.operator_enabled ? "Enabled" : "Disabled"}</strong></div>
+        <div class="setting-line"><span>Status</span><strong>${claude.state || "unknown"}</strong></div>
+        <div class="setting-line"><span>Model</span><strong>${claude.model || "N/A"}</strong></div>
+        <p class="detail-copy">${claude.message || ""}</p>
+        <button class="action-button" id="toggle-claude-button" style="margin-top:0.8rem;">${claude.operator_enabled ? "Disable Claude" : "Enable Claude"}</button>
+        ${
+          settings.using_demo_data
+            ? `<p class="detail-copy" style="margin-top:0.7rem;">Demo/bootstrap data is active, so Claude remains runtime-blocked even if the toggle is on.</p>`
+            : ""
+        }
+      </div>
+      <div class="detail-block">
+        <div class="eyebrow">Platform secrets</div>
         <div class="setting-line"><span>Polymarket relayer</span><strong>${settings.secrets?.polymarket_relayer_key_present ? "Configured" : "Missing"}</strong></div>
       </div>
     </div>
   `;
+
+  const saveModeButton = byId("save-mode-button");
+  if (saveModeButton) {
+    saveModeButton.addEventListener("click", applyAppMode);
+  }
+  const toggleClaudeButton = byId("toggle-claude-button");
+  if (toggleClaudeButton) {
+    toggleClaudeButton.addEventListener("click", toggleClaudeAgent);
+  }
 }
 
 function renderOrders() {
@@ -387,6 +435,19 @@ async function toggleKillSwitch() {
 
 async function refreshScan() {
   await fetchJson("/scan", { method: "POST" });
+  await loadDashboard();
+}
+
+async function applyAppMode() {
+  const select = byId("app-mode-select");
+  if (!select) return;
+  await fetchJson("/settings/app-mode", { method: "POST", body: JSON.stringify({ mode: select.value }) });
+  await loadDashboard();
+}
+
+async function toggleClaudeAgent() {
+  const enabled = !(state.payloads.settings?.claude?.operator_enabled);
+  await fetchJson("/settings/claude-agent", { method: "POST", body: JSON.stringify({ enabled }) });
   await loadDashboard();
 }
 

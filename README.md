@@ -48,8 +48,7 @@ tests/            Unit and integration coverage with canned fixtures
 
 ## Quick start
 
-1. Create and activate a virtual environment `python -m venv` and `.venv .venv\Scripts\activate`
-      ` (Windows) or `source .venv/bin/activate` (Unix).
+1. Create and activate a virtual environment with `python -m venv .venv`, then run `.venv\Scripts\activate` (Windows) or `source .venv/bin/activate` (Unix).
 2. Install dependencies with `pip install -r requirements.txt`.
 3. Copy `.env.example` to `.env` and add your real secrets locally.
 4. Start the API:
@@ -59,6 +58,30 @@ uvicorn app.main:app --app-dir backend --reload
 ```
 
 5. Open `http://127.0.0.1:8000`.
+
+## Claude controls
+
+- `ENABLE_CLAUDE_AGENT=true`
+  Initial default for Claude orchestration, explanations, summaries, and postmortems. The dashboard can also toggle Claude on or off at runtime.
+- `ENABLE_RESEARCH_MODE=true|false`
+  Only controls the optional research workflow. It does not control the main Claude agent layer.
+- Demo/bootstrap data automatically disables Claude at runtime, even if `ENABLE_CLAUDE_AGENT=true`, to avoid spending tokens on non-live market data.
+- The dashboard Settings panel includes a runtime Claude toggle. If demo data is active, the toggle can be switched on, but Claude will still remain blocked until real market data is in use.
+
+This means Claude can still be enabled in `paper`, `live`, or `backtest` modes while `ENABLE_RESEARCH_MODE=false`, `ENABLE_LIVE_TRADING=false`, and `ENABLE_MARKET_ORDERS=false`.
+
+## App modes
+
+`APP_MODE` controls how the system is allowed to execute trades:
+
+- `paper`
+  Safe default. Signals, risk checks, and execution flow still run, but orders are simulated through the paper broker instead of being sent live.
+- `live`
+  Intended for real trading. This mode is still guarded by deterministic risk checks and also requires `ENABLE_LIVE_TRADING=true`. In the current MVP, live posting is intentionally still gated until wallet signing and venue-specific execution are fully validated.
+- `backtest`
+  Reserved for historical replay and offline simulation. The architecture is ready for it, but the MVP does not yet include a full standalone backtest engine.
+
+Recommended setting right now: `APP_MODE=paper`.
 
 ## Safety defaults
 
@@ -83,4 +106,3 @@ uvicorn app.main:app --app-dir backend --reload
 - Anthropic Messages API: https://docs.anthropic.com/en/api/messages
 - Anthropic models overview: https://docs.anthropic.com/en/docs/about-claude/models/overview
 - Design reference repo: https://github.com/Jeanjohnsen/jeanjohnsen.github.io
-
