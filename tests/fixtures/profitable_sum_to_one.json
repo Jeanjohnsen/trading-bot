@@ -1,0 +1,14 @@
+{
+  "quote": {
+    "market_id": "fixture_sum_to_one",
+    "question": "Will a structural arb exist?",
+    "category": "finance",
+    "yes_price": 0.47,
+    "no_price": 0.48,
+    "yes_ask": 0.47,
+    "no_ask": 0.48,
+    "liquidity": 6000,
+    "volume_24h": 15000
+  }
+}
+

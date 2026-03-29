@@ -1,0 +1,11 @@
+[project]
+name = "poly-arb-agent"
+version = "0.1.0"
+description = "Production-minded paper-trading MVP for structural arbitrage on Polymarket."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend"]
+addopts = "-p no:cacheprovider"
+filterwarnings = ["ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning"]

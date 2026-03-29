@@ -1,0 +1,8 @@
+name: sports
+categories: ["sports", "soccer", "football", "tennis", "basketball"]
+min_liquidity_score: 0.30
+min_depth_notional: 100
+max_days_to_expiry: 14
+refresh_seconds: 10
+volatility_note: Short holding periods and high late-game execution pressure.
+

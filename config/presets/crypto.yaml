@@ -1,0 +1,8 @@
+name: crypto
+categories: ["crypto", "bitcoin", "ethereum", "blockchain"]
+min_liquidity_score: 0.40
+min_depth_notional: 150
+max_days_to_expiry: 60
+refresh_seconds: 10
+volatility_note: Fast markets with higher refresh cadence and spread churn.
+

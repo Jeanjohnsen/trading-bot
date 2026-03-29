@@ -1,0 +1,8 @@
+name: all
+categories: ["all"]
+min_liquidity_score: 0.30
+min_depth_notional: 100
+max_days_to_expiry: 120
+refresh_seconds: 20
+volatility_note: Broad scan across all supported categories.
+

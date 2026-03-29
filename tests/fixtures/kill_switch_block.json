@@ -1,0 +1,14 @@
+{
+  "quote": {
+    "market_id": "fixture_kill",
+    "question": "Will the kill switch block trading?",
+    "category": "finance",
+    "yes_price": 0.46,
+    "no_price": 0.47,
+    "yes_ask": 0.46,
+    "no_ask": 0.47,
+    "liquidity": 8000,
+    "volume_24h": 11000
+  }
+}
+

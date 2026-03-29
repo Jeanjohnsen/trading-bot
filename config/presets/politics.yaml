@@ -1,0 +1,8 @@
+name: politics
+categories: ["politics", "elections", "policy"]
+min_liquidity_score: 0.45
+min_depth_notional: 200
+max_days_to_expiry: 180
+refresh_seconds: 15
+volatility_note: Deep but sentiment-driven books with event clustering.
+

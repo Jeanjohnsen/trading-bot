@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>POLY-ARB AGENT</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div class="background-orb orb-one"></div>
+      <div class="background-orb orb-two"></div>
+
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Prediction Market Arbitrage Console</p>
+          <h1>POLY-ARB AGENT</h1>
+          <p class="hero-copy">
+            Deterministic structural arbitrage on Polymarket first. Claude interprets, summarizes, and learns, but hard risk controls remain code-enforced.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <div class="status-chip" id="mode-chip">Mode: loading</div>
+          <button class="action-button" id="refresh-button">Refresh Scan</button>
+          <button class="action-button danger" id="kill-switch-button">Toggle Kill Switch</button>
+        </div>
+      </header>
+
+      <section class="overview-grid" id="overview-grid"></section>
+
+      <div class="content-grid">
+        <section class="panel spotlight">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Ranked Feed</p>
+              <h2>Opportunity Feed</h2>
+            </div>
+            <p class="panel-meta" id="scan-timestamp">Waiting for scan</p>
+          </div>
+          <div class="feed-list" id="opportunity-feed"></div>
+        </section>
+
+        <section class="panel detail-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Execution View</p>
+              <h2>Market Detail</h2>
+            </div>
+            <button class="action-button secondary" id="execute-button">Paper Execute</button>
+          </div>
+          <div id="market-detail"></div>
+        </section>
+      </div>
+
+      <div class="content-grid secondary-grid">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Risk Controls</p>
+              <h2>Risk Panel</h2>
+            </div>
+          </div>
+          <div id="risk-panel"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Agent Layer</p>
+              <h2>Claude Insights</h2>
+            </div>
+          </div>
+          <div id="agent-panel"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">System Config</p>
+              <h2>Settings</h2>
+            </div>
+          </div>
+          <div id="settings-panel"></div>
+        </section>
+      </div>
+
+      <div class="content-grid secondary-grid">
+        <section class="panel wide-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Execution History</p>
+              <h2>Trade Blotter</h2>
+            </div>
+          </div>
+          <div id="orders-table"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Portfolio</p>
+              <h2>Positions</h2>
+            </div>
+          </div>
+          <div id="positions-panel"></div>
+        </section>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+  </html>
+

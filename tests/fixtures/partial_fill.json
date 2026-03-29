@@ -1,0 +1,14 @@
+{
+  "market_id": "fixture_partial",
+  "yes_book": {
+    "asks": [
+      { "price": 0.47, "size": 3 }
+    ]
+  },
+  "no_book": {
+    "asks": [
+      { "price": 0.48, "size": 10 }
+    ]
+  }
+}
+

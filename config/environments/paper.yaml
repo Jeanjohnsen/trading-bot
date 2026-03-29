@@ -1,0 +1,11 @@
+app:
+  mode: paper
+  bootstrap_demo_data: true
+  enable_live_trading: false
+  enable_market_orders: false
+scanner:
+  refresh_seconds: 15
+risk:
+  min_net_edge: 0.012
+  slippage_tolerance: 0.008
+

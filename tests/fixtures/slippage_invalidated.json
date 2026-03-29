@@ -1,0 +1,14 @@
+{
+  "quote": {
+    "market_id": "fixture_slippage",
+    "question": "Will slippage invalidate this trade?",
+    "category": "politics",
+    "yes_price": 0.48,
+    "no_price": 0.49,
+    "yes_ask": 0.48,
+    "no_ask": 0.49,
+    "liquidity": 2000,
+    "volume_24h": 9000
+  }
+}
+

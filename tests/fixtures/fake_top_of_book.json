@@ -1,0 +1,24 @@
+{
+  "quote": {
+    "market_id": "fixture_fake_depth",
+    "question": "Will fake top of book disappear after depth?",
+    "category": "crypto",
+    "yes_price": 0.53,
+    "no_price": 0.51,
+    "liquidity": 5000,
+    "volume_24h": 10000
+  },
+  "yes_book": {
+    "asks": [
+      { "price": 0.45, "size": 2 },
+      { "price": 0.54, "size": 60 }
+    ]
+  },
+  "no_book": {
+    "asks": [
+      { "price": 0.49, "size": 2 },
+      { "price": 0.55, "size": 60 }
+    ]
+  }
+}
+

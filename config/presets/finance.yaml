@@ -1,0 +1,8 @@
+name: finance
+categories: ["finance", "macro", "economy", "fed"]
+min_liquidity_score: 0.35
+min_depth_notional: 125
+max_days_to_expiry: 90
+refresh_seconds: 15
+volatility_note: Moderate volatility around releases and calendar events.
+

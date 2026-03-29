@@ -1,0 +1,8 @@
+name: weather
+categories: ["weather", "climate"]
+min_liquidity_score: 0.20
+min_depth_notional: 75
+max_days_to_expiry: 30
+refresh_seconds: 20
+volatility_note: Event bursts near forecast updates and resolution windows.
+

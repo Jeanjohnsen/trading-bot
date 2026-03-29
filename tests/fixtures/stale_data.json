@@ -1,0 +1,14 @@
+{
+  "quote": {
+    "market_id": "fixture_stale",
+    "question": "Will stale data be rejected?",
+    "category": "weather",
+    "yes_price": 0.45,
+    "no_price": 0.46,
+    "yes_ask": 0.45,
+    "no_ask": 0.46,
+    "liquidity": 600,
+    "volume_24h": 400
+  }
+}
+
