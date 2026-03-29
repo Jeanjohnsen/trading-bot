@@ -22,6 +22,10 @@ POLY-ARB AGENT is a production-minded MVP for structural prediction-market tradi
   - post-trade reviews
   - daily recap summaries
 - SQLite-first storage with a Postgres-ready shape
+- Forecast logging and analytics with:
+  - deterministic research forecast snapshots
+  - outcome/resolution syncing from closed Polymarket markets
+  - real Brier Score based on logged forecasts that resolved
 - Tests and fixtures for core formulas, risk checks, and strategy edge cases
 
 ## Architecture
@@ -70,6 +74,19 @@ uvicorn app.main:app --app-dir backend --reload
 
 This means Claude can still be enabled in `paper`, `live`, or `backtest` modes while `ENABLE_RESEARCH_MODE=false`, `ENABLE_LIVE_TRADING=false`, and `ENABLE_MARKET_ORDERS=false`.
 
+## Runtime control layers
+
+There are four separate control layers in the app:
+
+- `APP_MODE`
+  Selects the overall operating mode: `paper`, `live`, or `backtest`.
+- Execution gates
+  `ENABLE_LIVE_TRADING`, `ENABLE_MARKET_ORDERS`, and the kill switch decide whether the app is actually allowed to send or simulate trades.
+- Data source
+  `BOOTSTRAP_DEMO_DATA=true` allows demo/fallback market data if live venue data is unavailable.
+- Research / forecasting
+  `ENABLE_RESEARCH_MODE=true` turns on deterministic research forecast logging and resolution tracking without requiring live trading.
+
 ## App modes
 
 `APP_MODE` controls how the system is allowed to execute trades:
@@ -82,6 +99,17 @@ This means Claude can still be enabled in `paper`, `live`, or `backtest` modes w
   Reserved for historical replay and offline simulation. The architecture is ready for it, but the MVP does not yet include a full standalone backtest engine.
 
 Recommended setting right now: `APP_MODE=paper`.
+
+## Suggested operating path
+
+- Data collection only
+  Use `APP_MODE=paper`, keep `ENABLE_LIVE_TRADING=false`, and leave the kill switch active. This gives you real market ingestion and logging without live execution.
+- Research and prediction tracking
+  Keep `APP_MODE=paper`, set `ENABLE_RESEARCH_MODE=true`, and optionally enable Claude if you want research briefs. Forecasts will be logged, later matched with resolved market outcomes, and included in Brier analytics.
+- Paper execution
+  Use `APP_MODE=paper` with live trading still off. This is the correct place to validate sizing, slippage assumptions, and risk blocks.
+- Live execution
+  Use `APP_MODE=live` only after paper validation, and only with `ENABLE_LIVE_TRADING=true`. Live posting is still intentionally gated until signing and venue-specific execution are fully validated.
 
 ## Bankroll sources
 
@@ -106,6 +134,19 @@ Recommended setting right now: `APP_MODE=paper`.
 - All fixed sizing is still clipped by the hard cap in `risk.max_position_bankroll_fraction`.
 - The risk engine also checks that projected expected profit clears the configured Claude/API cost floor before approving a trade.
 
+## Forecast logging and Brier Score
+
+- Forecast logging only runs when `ENABLE_RESEARCH_MODE=true`.
+- On each scan, the app writes deterministic forecast snapshots for current markets.
+- The forecast model is a bounded research baseline:
+  - market-implied YES probability
+  - plus a small deterministic momentum/liquidity adjustment
+- The app also polls closed Polymarket markets and records resolved YES/NO outcomes for any market that has open forecast records.
+- The dashboard Brier Score is calculated from the latest forecast snapshot that existed before each market resolved.
+- If no forecasted markets have resolved yet, the dashboard shows no meaningful Brier score yet.
+
+This means you can collect data and evaluate forecast quality before enabling any live execution.
+
 ## Safety defaults
 
 - Live trading is disabled by default.
@@ -121,6 +162,12 @@ Recommended setting right now: `APP_MODE=paper`.
 - Cross-market group execution with strict atomicity guarantees
 - Research-driven discretionary trades
 - Automated config mutation by any model
+- Full historical backtest replay engine
+
+## Current platform scope
+
+- Polymarket is integrated now.
+- Kalshi is not yet integrated in the current MVP, even though the architecture is prepared for an adapter later.
 
 ## Sources used for this MVP
 

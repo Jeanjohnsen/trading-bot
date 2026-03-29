@@ -480,6 +480,64 @@ function formatSystemStatus(health, analytics) {
   return "Monitoring";
 }
 
+function stripMarkdown(value) {
+  return String(value || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\|/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactText(value, maxLength = 220) {
+  const normalized = stripMarkdown(value);
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}...`;
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderReadableText(value) {
+  const normalized = String(value || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\|/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return escapeHtml(normalized).replace(/\n/g, "<br>");
+}
+
+function formatClaudeStateLabel(state) {
+  if (state === "ok") return "Ready";
+  if (state === "disabled_by_operator") return "Disabled";
+  if (state === "disabled_demo_mode") return "Demo-blocked";
+  if (state === "billing_blocked") return "Billing-blocked";
+  if (state === "request_error") return "Request issue";
+  if (state === "auth_error") return "Auth issue";
+  return humanizeRiskKey(state || "unknown");
+}
+
+function formatExpiryLabel(value) {
+  if (!value) return "No expiry";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "No expiry";
+  return date.toLocaleDateString();
+}
+
 function renderOverview() {
   const overview = state.payloads.health ? state.payloads.overview : null;
   const analytics = state.payloads.analytics || {};
@@ -540,6 +598,10 @@ function renderOverview() {
 }
 
 function renderOpportunities() {
+  const settings = state.payloads.settings || {};
+  const researchEnabled = settings.app?.enable_research_mode === true;
+  const markets = state.payloads.markets || [];
+  const forecasting = state.payloads.analytics?.forecasting || {};
   const opportunities = (state.payloads.opportunities || [])
     .map((opportunity) => ({
       ...opportunity,
@@ -567,7 +629,39 @@ function renderOpportunities() {
 
   byId("opportunity-feed").innerHTML =
     visibleOpportunities.length === 0
-        ? `<div class="empty">No opportunities found yet.</div>`
+        ? researchEnabled && markets.length
+          ? `
+            <div class="feed-toolbar">
+              <div class="panel-meta">Research mode is active. No arb signals cleared the scanner right now, but market data and forecast snapshots are still being collected.</div>
+              <div class="panel-meta">Tracked markets: ${forecasting.tracked_markets || markets.length} • Logged forecasts: ${forecasting.logged_snapshots || 0} • Resolved forecasts: ${forecasting.resolved_predictions || 0}</div>
+            </div>
+            ${markets
+              .slice()
+              .sort((left, right) => Number(right.liquidity || 0) - Number(left.liquidity || 0))
+              .slice(0, 10)
+              .map(
+                (market) => `
+                  <article class="feed-item research-feed-item">
+                    <div class="feed-row">
+                      <div>
+                        <div class="feed-title">${market.question}</div>
+                        <div class="feed-subtitle">${market.category || "all"} • Research watchlist</div>
+                        <div class="feed-context">Forecast snapshots are being logged from live market data even though no executable arb is currently shown.</div>
+                      </div>
+                      <div class="badge watch">Tracking</div>
+                    </div>
+                    <div class="pill-row" style="margin-top:0.9rem;">
+                      <span class="pill pill-accent">YES ${formatPercent(market.yes_price || 0)}</span>
+                      <span class="pill">NO ${formatPercent(market.no_price || 0)}</span>
+                      <span class="pill">Liquidity ${formatPercent((market.liquidity_score || 0))}</span>
+                      <span class="pill">Expiry ${formatExpiryLabel(market.expiry)}</span>
+                    </div>
+                  </article>
+                `
+              )
+              .join("")}
+          `
+          : `<div class="empty">No opportunities found yet.</div>`
         : `
           <div class="feed-toolbar">
             <div class="feed-filter-row">
@@ -627,7 +721,11 @@ function renderMarketDetail() {
   const markets = state.payloads.markets || [];
   const selected = opportunities.find((item) => item.opportunity_id === state.selectedOpportunityId) || opportunities[0];
   if (!selected) {
-    byId("market-detail").innerHTML = `<div class="empty">Select an opportunity to inspect execution context.</div>`;
+    const researchEnabled = state.payloads.settings?.app?.enable_research_mode === true;
+    const forecasting = state.payloads.analytics?.forecasting || {};
+    byId("market-detail").innerHTML = researchEnabled
+      ? `<div class="empty">Research mode is collecting live market snapshots${forecasting.logged_snapshots ? ` and has logged ${forecasting.logged_snapshots} forecast snapshots` : ""}. No executable opportunity is selected yet.</div>`
+      : `<div class="empty">Select an opportunity to inspect execution context.</div>`;
     return;
   }
 
@@ -825,32 +923,47 @@ function renderRisk() {
 function renderAgent() {
   const agent = state.payloads.agent || { notes: [], summary: "", claude: {} };
   const claude = agent.claude || {};
+  const claudeTone = claude.state === "ok" ? "approved" : claude.state?.includes("disabled") ? "watch" : "blocked";
+  const summaryText = compactText(agent.summary || "No summary yet.", 220);
+  const notes = (agent.notes || []).slice(0, 4);
   byId("agent-panel").innerHTML = `
     <div class="stack">
       <div class="detail-block">
-        <div class="eyebrow">Claude status</div>
-        <div class="detail-row"><span>State</span><strong>${claude.state || "unknown"}</strong></div>
+        <div class="feed-row">
+          <div class="eyebrow">Claude status</div>
+          <span class="badge ${statusClass(claudeTone)}">${formatClaudeStateLabel(claude.state)}</span>
+        </div>
         <div class="detail-row"><span>Model</span><strong>${claude.model || "N/A"}</strong></div>
-        <p class="detail-copy">${claude.message || "No Claude status yet."}</p>
-        ${claude.error?.body ? `<p class="detail-copy">API detail: ${claude.error.body}</p>` : ""}
-        ${claude.error?.message ? `<p class="detail-copy">Transport detail: ${claude.error.message}</p>` : ""}
+        <p class="detail-copy agent-status-note">${compactText(claude.message || "No Claude status yet.", 140)}</p>
+        ${
+          claude.error?.body || claude.error?.message
+            ? `<p class="detail-copy">Issue: ${compactText(claude.error?.body || claude.error?.message, 140)}</p>`
+            : ""
+        }
       </div>
-      <div class="detail-block">
+      <div class="detail-block agent-summary-card">
         <div class="eyebrow">Daily recap</div>
-        <p class="detail-copy">${agent.summary || "No summary yet."}</p>
+        <p class="detail-copy">${summaryText}</p>
       </div>
       ${
-        (agent.notes || []).length
-          ? agent.notes
+        notes.length
+          ? notes
               .map(
                 (note) => `
-                <div class="timeline-item">
-                  <div class="feed-row">
-                    <strong>${note.title}</strong>
-                    <span class="muted">${formatDate(note.created_at)}</span>
-                  </div>
-                  <p class="detail-copy" style="margin-top:0.55rem;">${note.body}</p>
-                </div>
+                <details class="timeline-item insight-card insight-details">
+                  <summary class="insight-summary">
+                    <div class="feed-row insight-meta">
+                      <strong>${compactText(note.title, 56)}</strong>
+                      <span class="muted">${formatDate(note.created_at)}</span>
+                    </div>
+                    <div class="pill-row" style="margin-top:0.65rem;">
+                      <span class="pill pill-accent">${humanizeRiskKey(note.note_type || "insight")}</span>
+                      <span class="pill">Click to expand</span>
+                    </div>
+                    <p class="detail-copy insight-excerpt" style="margin-top:0.65rem;">${compactText(note.body, 260)}</p>
+                  </summary>
+                  <div class="insight-expanded detail-copy">${renderReadableText(note.body)}</div>
+                </details>
               `
               )
               .join("")
