@@ -1,12 +1,13 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.domain.models import AppMode, ExecutionIntent, MarketQuote, OrderBookSnapshot, OrderLeg, PriceLevel
 from app.execution.paper_broker import PaperBroker
 from app.risk.validate_risk import RiskEngine, RiskState
 from app.strategies.orderbook_arb import orderbook_micro_arb
+from app.strategies.cross_market_arb import cross_market_opportunities
 from app.strategies.sum_to_one import direct_sum_to_one_opportunity
 
 
@@ -93,3 +94,34 @@ def test_partial_fill_scenario_is_reported() -> None:
     assert report.status == "partial"
     assert len(report.fills) > 0
 
+
+def test_cross_market_requires_single_event_coherent_group() -> None:
+    now = datetime.now(UTC)
+    quotes = [
+        MarketQuote(
+            market_id="m1",
+            event_id="event_1",
+            question="Will BTC close above 100k by year end?",
+            category="crypto",
+            related_group="event_1:event-tree",
+            expiry=now + timedelta(days=30),
+            yes_price=0.2,
+            no_price=0.8,
+            metadata={"cross_market_eligible": True, "neg_risk": True},
+        ),
+        MarketQuote(
+            market_id="m2",
+            event_id="event_2",
+            question="Will ETH ETF launch by year end?",
+            category="crypto",
+            related_group="event_1:event-tree",
+            expiry=now + timedelta(days=30),
+            yes_price=0.2,
+            no_price=0.8,
+            metadata={"cross_market_eligible": True, "neg_risk": True},
+        ),
+    ]
+
+    opportunities = cross_market_opportunities(quotes, buffer=0.01)
+
+    assert opportunities == []

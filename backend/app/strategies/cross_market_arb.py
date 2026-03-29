@@ -8,13 +8,28 @@ from app.domain.models import MarketQuote, OpportunityCandidate, StrategyType
 def cross_market_opportunities(quotes: list[MarketQuote], buffer: float) -> list[OpportunityCandidate]:
     grouped: dict[str, list[MarketQuote]] = defaultdict(list)
     for quote in quotes:
-        if quote.related_group:
+        if quote.related_group and quote.metadata.get("cross_market_eligible"):
             grouped[quote.related_group].append(quote)
 
     opportunities: list[OpportunityCandidate] = []
     for group_key, members in grouped.items():
         if len(members) < 2:
             continue
+        event_ids = {member.event_id for member in members if member.event_id}
+        if not event_ids:
+            continue
+        if len(event_ids) > 1:
+            continue
+        if not all(member.metadata.get("cross_market_eligible") for member in members):
+            continue
+        expiries = [member.expiry for member in members if member.expiry is not None]
+        if len(expiries) >= 2:
+            expiry_span_minutes = (max(expiries) - min(expiries)).total_seconds() / 60
+            if expiry_span_minutes > 24 * 60:
+                continue
+        if not any(member.metadata.get("neg_risk") for member in members) and len(members) < 3:
+            continue
+
         summed = sum(member.yes_price for member in members)
         gross_edge = 1.0 - summed
         net_edge = gross_edge - buffer
@@ -49,8 +64,9 @@ def cross_market_opportunities(quotes: list[MarketQuote], buffer: float) -> list
                     "group": group_key,
                     "summed_yes_probability": round(summed, 6),
                     "member_count": len(members),
+                    "event_id_count": len(event_ids),
+                    "expiry_span_minutes": round((max(expiries) - min(expiries)).total_seconds() / 60, 4) if len(expiries) >= 2 else 0.0,
                 },
             )
         )
     return opportunities
-

@@ -337,6 +337,11 @@ function formatPercent(value) {
   return percent.format(Number(value || 0));
 }
 
+function formatScore(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
+  return Number(value).toFixed(3);
+}
+
 function formatDate(value) {
   if (!value) return "N/A";
   return new Date(value).toLocaleString();
@@ -466,9 +471,19 @@ function getOpportunityDisplayState(opportunity) {
   };
 }
 
+function formatSystemStatus(health, analytics) {
+  if (health?.kill_switch) return "Safety-blocked";
+  if ((analytics?.max_drawdown || 0) >= 0.08) return "Drawdown-blocked";
+  if (health?.mode === "live" && health?.account?.active?.source === "venue_synced") return "Live-routed";
+  if (health?.mode === "paper") return "Paper";
+  if (health?.mode === "backtest") return "Backtest";
+  return "Monitoring";
+}
+
 function renderOverview() {
   const overview = state.payloads.health ? state.payloads.overview : null;
   const analytics = state.payloads.analytics || {};
+  const forecasting = analytics.forecasting || {};
   const claude = state.payloads.health?.claude || {};
   const account = getAccountBundle();
   const activeAccount = account.active || {};
@@ -496,6 +511,14 @@ function renderOverview() {
         ? `${activeAccount.source === "venue_synced" ? "Venue positions" : "Open value"} ${formatMoney(activeAccount.positions_value)}`
         : `${overview.concurrent_positions} concurrent`,
     },
+    {
+      label: "Brier Score",
+      value: formatScore(analytics.brier),
+      foot:
+        forecasting.resolved_predictions > 0
+          ? `${forecasting.resolved_predictions} resolved of ${forecasting.tracked_markets || 0} tracked`
+          : "No resolved forecasts yet",
+    },
     { label: "Blocked Trades", value: `${overview.blocked_trades}`, foot: "Deterministic filters" },
     { label: "Max Drawdown", value: formatPercent(analytics.max_drawdown || 0), foot: "New entries block at 8%" },
   ];
@@ -513,7 +536,7 @@ function renderOverview() {
     )
     .join("");
 
-  byId("mode-chip").textContent = `Mode: ${overview.mode} • ${formatBankrollSource(activeAccount.source)} • Claude: ${claude.state || "idle"}`;
+  byId("mode-chip").textContent = `${formatSystemStatus(state.payloads.health, analytics)} • Mode: ${overview.mode} • ${formatBankrollSource(activeAccount.source)} • Claude: ${claude.state || "idle"}`;
 }
 
 function renderOpportunities() {

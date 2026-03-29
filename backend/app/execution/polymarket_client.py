@@ -46,6 +46,9 @@ class PolymarketClient:
     async def fetch_markets(self, max_markets: int) -> list:
         return await self.market_ingestion.fetch_active_markets(max_markets=max_markets)
 
+    async def fetch_closed_markets(self, max_markets: int) -> list:
+        return await self.market_ingestion.fetch_closed_markets(max_markets=max_markets)
+
     async def fetch_orderbooks(self, quotes: list) -> dict:
         return await self.orderbook_ingestion.fetch_for_quotes(quotes)
 

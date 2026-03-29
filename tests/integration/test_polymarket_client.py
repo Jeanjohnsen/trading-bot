@@ -49,6 +49,87 @@ def test_market_ingestion_normalizes_polymarket_events(monkeypatch) -> None:
     assert len(quotes) == 1
     assert quotes[0].yes_token_id == "yes_token"
     assert quotes[0].no_price == 0.46
+    assert quotes[0].related_group is None
+
+
+def test_market_ingestion_filters_expired_and_closed_markets(monkeypatch) -> None:
+    async def fake_get(self, url, params=None):  # noqa: ARG001
+        return MockResponse(
+            [
+                {
+                    "id": "event_1",
+                    "slug": "fed-cuts",
+                    "category": "macro",
+                    "markets": [
+                        {
+                            "id": "expired_market",
+                            "question": "Expired market",
+                            "outcomes": "[\"Yes\", \"No\"]",
+                            "outcomePrices": "[0.1, 0.9]",
+                            "endDate": "2025-01-01T00:00:00Z",
+                        },
+                        {
+                            "id": "closed_market",
+                            "question": "Closed market",
+                            "outcomes": "[\"Yes\", \"No\"]",
+                            "outcomePrices": "[0.4, 0.6]",
+                            "closed": True,
+                            "endDate": "2026-05-01T00:00:00Z",
+                        },
+                        {
+                            "id": "active_market",
+                            "question": "Active market",
+                            "outcomes": "[\"Yes\", \"No\"]",
+                            "outcomePrices": "[0.52, 0.46]",
+                            "groupItemTitle": "Rate path",
+                            "endDate": "2026-05-01T00:00:00Z",
+                        },
+                    ],
+                }
+            ]
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    ingestion = PolymarketMarketIngestion(Settings())
+
+    quotes = asyncio.run(ingestion.fetch_active_markets(max_markets=3))
+
+    assert [quote.market_id for quote in quotes] == ["active_market"]
+    assert quotes[0].related_group == "event_1:rate-path"
+
+
+def test_market_ingestion_keeps_resolution_metadata_for_closed_fetch(monkeypatch) -> None:
+    async def fake_get(self, url, params=None):  # noqa: ARG001
+        return MockResponse(
+            [
+                {
+                    "id": "event_1",
+                    "slug": "btc-range",
+                    "category": "crypto",
+                    "closed": True,
+                    "markets": [
+                        {
+                            "id": "resolved_market",
+                            "question": "Did BTC close above 100k?",
+                            "outcomes": "[\"Yes\", \"No\"]",
+                            "outcomePrices": "[1.0, 0.0]",
+                            "closed": True,
+                            "resolved": True,
+                            "endDate": "2026-03-01T00:00:00Z",
+                        }
+                    ],
+                }
+            ]
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    ingestion = PolymarketMarketIngestion(Settings())
+
+    quotes = asyncio.run(ingestion.fetch_closed_markets(max_markets=1))
+
+    assert len(quotes) == 1
+    assert quotes[0].metadata["closed"] is True
+    assert quotes[0].metadata["resolved_outcome"] == 1
 
 
 def test_polymarket_client_fetches_venue_synced_account_snapshot(monkeypatch) -> None:

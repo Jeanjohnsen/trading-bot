@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 def test_dashboard_and_core_api_routes_smoke() -> None:
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["ENABLE_RESEARCH_MODE"] = "true"
     from app.main import app
 
     with TestClient(app) as client:
@@ -20,6 +21,7 @@ def test_dashboard_and_core_api_routes_smoke() -> None:
         trade_size = client.post("/settings/trade-size", json={"mode": "fixed", "fraction": 0.02})
         updated_health = client.get("/health")
         updated_settings = client.get("/settings")
+        analytics = client.get("/analytics")
 
         assert health.status_code == 200
         assert dashboard.status_code == 200
@@ -42,6 +44,8 @@ def test_dashboard_and_core_api_routes_smoke() -> None:
         assert updated_settings.json()["app"]["enable_market_orders"] is True
         assert updated_settings.json()["claude"]["operator_enabled"] is False
         assert updated_settings.json()["trade_sizing"]["global"]["fraction"] == 0.02
+        assert analytics.json()["forecasting"]["tracked_markets"] > 0
+        assert analytics.json()["forecasting"]["logged_snapshots"] > 0
 
         opportunity_payload = client.get("/opportunities").json()
         if opportunity_payload:

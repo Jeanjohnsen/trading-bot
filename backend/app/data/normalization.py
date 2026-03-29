@@ -7,6 +7,8 @@ from typing import Any
 from app.data.metadata import infer_category
 from app.domain.models import MarketQuote
 
+GENERIC_GROUP_LABELS = {"all", "general", "default", "other", "misc", "miscellaneous", "overview"}
+
 
 def _parse_jsonish_list(value: Any) -> list[Any]:
     if value is None:
@@ -47,11 +49,73 @@ def _parse_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _normalized_group_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    label = str(value).strip()
+    if not label:
+        return None
+    compact = " ".join(label.split())
+    if compact.lower() in GENERIC_GROUP_LABELS:
+        return None
+    return compact.lower().replace(" ", "-")
+
+
+def _normalized_outcome_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    label = str(value).strip().lower()
+    if label in {"yes", "true", "1"}:
+        return "yes"
+    if label in {"no", "false", "0"}:
+        return "no"
+    return None
+
+
+def _infer_resolution_outcome(market: dict[str, Any], payload: dict[str, Any], yes_price: float, no_price: float) -> int | None:
+    candidates = [
+        market.get("resolvedOutcome"),
+        market.get("winningOutcome"),
+        market.get("winner"),
+        market.get("result"),
+        payload.get("resolvedOutcome"),
+        payload.get("winningOutcome"),
+        payload.get("winner"),
+        payload.get("result"),
+    ]
+    for candidate in candidates:
+        normalized = _normalized_outcome_label(candidate)
+        if normalized == "yes":
+            return 1
+        if normalized == "no":
+            return 0
+    if yes_price >= 0.999 and no_price <= 0.001:
+        return 1
+    if no_price >= 0.999 and yes_price <= 0.001:
+        return 0
+    return None
+
+
 def normalize_event_payload(payload: dict[str, Any]) -> list[MarketQuote]:
     event_id = str(payload.get("id") or payload.get("eventId") or "")
     event_slug = payload.get("slug") or payload.get("ticker") or event_id
+    event_title = payload.get("title") or payload.get("question") or event_slug
     event_category = payload.get("category")
-    related_group = payload.get("slug") or payload.get("title") or event_id
+    event_group_seed = event_id or str(event_slug or event_title)
 
     markets: list[dict[str, Any]] = payload.get("markets") or []
     normalized: list[MarketQuote] = []
@@ -75,7 +139,40 @@ def normalize_event_payload(payload: dict[str, Any]) -> list[MarketQuote]:
 
         question = market.get("question") or payload.get("title") or payload.get("question") or "Unknown market"
         category = infer_category(question, event_category)
-        expires_at = _parse_datetime(market.get("endDate") or payload.get("endDate"))
+        expires_at = _parse_datetime(
+            market.get("endDate")
+            or market.get("end_date")
+            or market.get("resolveDate")
+            or market.get("resolutionDate")
+            or payload.get("endDate")
+            or payload.get("end_date")
+            or payload.get("resolveDate")
+            or payload.get("resolutionDate")
+        )
+        group_label = _normalized_group_label(
+            market.get("groupItemTitle")
+            or market.get("groupTitle")
+            or market.get("subtitle")
+            or payload.get("groupItemTitle")
+            or payload.get("groupTitle")
+        )
+        neg_risk = bool(market.get("negRisk", payload.get("negRisk", False)))
+        related_group = f"{event_group_seed}:{group_label}" if group_label else (f"{event_group_seed}:event-tree" if neg_risk else None)
+        market_closed = (
+            _parse_bool(market.get("closed"))
+            or _parse_bool(market.get("resolved"))
+            or _parse_bool(market.get("archived"))
+            or _parse_bool(payload.get("closed"))
+            or _parse_bool(payload.get("resolved"))
+            or _parse_bool(payload.get("archived"))
+        )
+        market_active = not (
+            market.get("active") is False
+            or payload.get("active") is False
+            or str(market.get("active", "")).strip().lower() == "false"
+            or str(payload.get("active", "")).strip().lower() == "false"
+        )
+        resolution_outcome = _infer_resolution_outcome(market, payload, yes_price, no_price) if market_closed else None
 
         normalized.append(
             MarketQuote(
@@ -84,7 +181,7 @@ def normalize_event_payload(payload: dict[str, Any]) -> list[MarketQuote]:
                 slug=market.get("slug") or event_slug,
                 question=question,
                 category=category,
-                related_group=str(market.get("groupItemTitle") or related_group),
+                related_group=related_group,
                 expiry=expires_at,
                 yes_token_id=token_mapping.get("yes") or market.get("yesTokenId"),
                 no_token_id=token_mapping.get("no") or market.get("noTokenId"),
@@ -100,11 +197,16 @@ def normalize_event_payload(payload: dict[str, Any]) -> list[MarketQuote]:
                 orderbook_enabled=bool(market.get("enableOrderBook", True)),
                 last_updated=_parse_datetime(market.get("updatedAt") or payload.get("updatedAt")) or datetime.now(UTC),
                 metadata={
-                    "neg_risk": bool(market.get("negRisk", False)),
+                    "neg_risk": neg_risk,
                     "event_slug": event_slug,
+                    "event_title": event_title,
                     "series": payload.get("seriesSlug"),
+                    "group_label": group_label,
+                    "closed": market_closed,
+                    "active": market_active,
+                    "cross_market_eligible": bool(related_group),
+                    "resolved_outcome": resolution_outcome,
                 },
             )
         )
     return normalized
-

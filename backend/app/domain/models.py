@@ -139,6 +139,32 @@ class AccountSnapshot(BaseModel):
     sync_error: str | None = None
 
 
+class ForecastSnapshot(BaseModel):
+    forecast_id: str = Field(default_factory=lambda: f"fc_{uuid4().hex[:12]}")
+    market_id: str
+    question: str
+    category: str = "all"
+    source: str = "deterministic_research_v1"
+    mode: AppMode = AppMode.PAPER
+    forecast_probability: float
+    market_probability: float
+    confidence: float = 0.0
+    edge: float = 0.0
+    rationale: str = ""
+    expires_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class MarketResolution(BaseModel):
+    resolution_id: str = Field(default_factory=lambda: f"res_{uuid4().hex[:12]}")
+    market_id: str
+    question: str
+    outcome: int
+    resolved_at: datetime = Field(default_factory=utc_now)
+    source: str = "polymarket_closed_feed"
+    label: str = "resolved"
+
+
 class TradeSizeProfile(BaseModel):
     mode: TradeSizeMode = TradeSizeMode.AUTO
     fraction: float | None = None

@@ -10,7 +10,6 @@ from app.agents.claude_client import ClaudeClient
 from app.agents.claude_explainer_agent import ClaudeExplainerAgent
 from app.agents.claude_orchestrator import ClaudeOrchestrator
 from app.agents.claude_postmortem_agent import ClaudePostmortemAgent
-from app.analytics.brier import brier_score
 from app.analytics.drawdown import max_drawdown
 from app.analytics.pnl import realized_pnl, unrealized_pnl
 from app.analytics.sharpe import sharpe_ratio
@@ -22,7 +21,9 @@ from app.domain.models import (
     BankrollSource,
     DashboardSummary,
     ExecutionIntent,
+    ForecastSnapshot,
     MarketQuote,
+    MarketResolution,
     NotificationLevel,
     NotificationMessage,
     OpportunityCandidate,
@@ -89,7 +90,11 @@ class TradingRuntime:
         )
         self.global_trade_size_profile = TradeSizeProfile(mode=TradeSizeMode.AUTO, fraction=None)
         self.manual_trade_size_overrides: dict[str, TradeSizeProfile] = {}
-        self.equity_curve: list[float] = [self.paper_bankroll]
+        self.equity_curves: dict[str, list[float]] = {
+            AppMode.PAPER.value: [self.paper_bankroll],
+            AppMode.BACKTEST.value: [self.paper_bankroll],
+            AppMode.LIVE.value: [],
+        }
         self.background_task: asyncio.Task | None = None
 
         self.runtime_config.setdefault("app", {})
@@ -153,8 +158,22 @@ class TradingRuntime:
         if self.current_mode is AppMode.LIVE and not self.venue_account.synced:
             return
         equity_point = active.total_equity or active.active_bankroll
-        if not self.equity_curve or abs(self.equity_curve[-1] - equity_point) > 1e-6:
-            self.equity_curve.append(equity_point)
+        curve = self.equity_curves.setdefault(self.current_mode.value, [])
+        if not curve:
+            curve.append(equity_point)
+            return
+        if abs(curve[-1] - equity_point) > 1e-6:
+            curve.append(equity_point)
+
+    def _active_equity_curve(self) -> list[float]:
+        if self.current_mode is AppMode.LIVE and not self.venue_account.synced:
+            return []
+        active = self._active_account_snapshot()
+        curve = self.equity_curves.setdefault(self.current_mode.value, [])
+        if not curve:
+            seed_value = active.total_equity or active.active_bankroll or self.paper_bankroll
+            curve.append(seed_value)
+        return curve
 
     def _trade_size_presets(self) -> list[float]:
         presets = self.runtime_config.get("risk", {}).get("trade_size_presets", [0.02, 0.05, 0.10])
@@ -189,7 +208,7 @@ class TradingRuntime:
         return trade_size_key(opportunity.strategy_type, opportunity.market_id, opportunity.related_market_ids)
 
     def _risk_state(self) -> RiskState:
-        drawdown = max_drawdown(self.equity_curve)
+        drawdown = max_drawdown(self._active_equity_curve())
         active_account = self._active_account_snapshot()
         return RiskState(
             bankroll=active_account.active_bankroll,
@@ -245,7 +264,70 @@ class TradingRuntime:
         self._rescore_opportunities()
         self.last_scan_at = datetime.now(UTC)
         self.repository.save_market_snapshots(self.quotes)
+        await self._sync_forecast_records()
         await self._refresh_agent_notes()
+
+    async def _sync_forecast_records(self) -> None:
+        if self.research_mode_enabled:
+            forecasts = self._build_forecast_snapshots(self.quotes)
+            self.repository.save_forecasts(forecasts)
+        unresolved_market_ids = set(self.repository.unresolved_forecast_market_ids())
+        if not unresolved_market_ids:
+            return
+        try:
+            closed_quotes = await self.polymarket_client.fetch_closed_markets(
+                max_markets=max(int(self.runtime_config.get("scanner", {}).get("max_markets", 80)), 200)
+            )
+        except Exception as exc:
+            logger.warning(
+                "closed market sync failed",
+                extra={"event": "closed_market_sync_failed", "error_message": str(exc)},
+            )
+            return
+        resolutions: list[MarketResolution] = []
+        for quote in closed_quotes:
+            if quote.market_id not in unresolved_market_ids:
+                continue
+            outcome = quote.metadata.get("resolved_outcome")
+            if outcome is None:
+                continue
+            resolutions.append(
+                MarketResolution(
+                    market_id=quote.market_id,
+                    question=quote.question,
+                    outcome=int(outcome),
+                    resolved_at=quote.expiry or quote.last_updated,
+                    source="polymarket_closed_feed",
+                    label="yes" if int(outcome) == 1 else "no",
+                )
+            )
+        self.repository.upsert_market_resolutions(resolutions)
+
+    def _build_forecast_snapshots(self, quotes: list[MarketQuote]) -> list[ForecastSnapshot]:
+        forecasts: list[ForecastSnapshot] = []
+        for quote in quotes:
+            market_probability = min(max(float(quote.yes_price), 0.01), 0.99)
+            momentum_adjustment = max(min(float(quote.recent_move or 0.0) * 0.15, 0.08), -0.08)
+            liquidity_adjustment = (quote.liquidity_score - 0.5) * 0.04
+            forecast_probability = min(max(market_probability + momentum_adjustment + liquidity_adjustment, 0.01), 0.99)
+            confidence = min(max(0.35 + (quote.liquidity_score * 0.45), 0.35), 0.9)
+            edge = forecast_probability - market_probability
+            forecasts.append(
+                ForecastSnapshot(
+                    market_id=quote.market_id,
+                    question=quote.question,
+                    category=quote.category,
+                    source="deterministic_research_v1",
+                    mode=self.current_mode,
+                    forecast_probability=round(forecast_probability, 6),
+                    market_probability=round(market_probability, 6),
+                    confidence=round(confidence, 6),
+                    edge=round(edge, 6),
+                    rationale="Deterministic research forecast using market-implied probability with bounded momentum/liquidity adjustment.",
+                    expires_at=quote.expiry,
+                )
+            )
+        return forecasts
 
     async def _refresh_agent_notes(self) -> None:
         self.agent_notes = []
@@ -529,7 +611,7 @@ class TradingRuntime:
             return {
                 "bankroll": active_account.active_bankroll,
                 "bankroll_source": active_account.source.value,
-                "drawdown_fraction": max_drawdown(self.equity_curve),
+                "drawdown_fraction": max_drawdown(self._active_equity_curve()),
                 "daily_loss": realized_pnl(self.positions),
                 "category_exposure": category_exposure,
                 "kill_switch": self.kill_switch.is_active(),
@@ -539,7 +621,7 @@ class TradingRuntime:
         return {
             "bankroll": active_account.active_bankroll,
             "bankroll_source": active_account.source.value,
-            "drawdown_fraction": max_drawdown(self.equity_curve),
+            "drawdown_fraction": max_drawdown(self._active_equity_curve()),
             "daily_loss": realized_pnl(self.positions),
             "category_exposure": category_exposure,
             "kill_switch": self.kill_switch.is_active(),
@@ -590,18 +672,21 @@ class TradingRuntime:
         return [note for note in self.repository.latest_agent_notes(limit=10) if note["note_type"] == "postmortem"]
 
     def get_analytics(self) -> dict:
+        equity_curve = self._active_equity_curve()
         returns = [0.0]
-        for index in range(1, len(self.equity_curve)):
-            previous = self.equity_curve[index - 1]
-            current = self.equity_curve[index]
+        for index in range(1, len(equity_curve)):
+            previous = equity_curve[index - 1]
+            current = equity_curve[index]
             returns.append((current - previous) / max(previous, 1e-6))
+        forecasting = self.repository.forecast_metrics()
         return {
             "realized_pnl": realized_pnl(self.positions),
             "unrealized_pnl": unrealized_pnl(self.positions),
-            "max_drawdown": max_drawdown(self.equity_curve),
+            "max_drawdown": max_drawdown(equity_curve),
             "sharpe": sharpe_ratio(returns),
-            "brier": brier_score([0.5, 0.6, 0.55], [1, 0, 1]),
-            "equity_curve": self.equity_curve,
+            "brier": forecasting.get("brier_score"),
+            "forecasting": forecasting,
+            "equity_curve": equity_curve,
         }
 
     def get_settings_view(self) -> dict:
