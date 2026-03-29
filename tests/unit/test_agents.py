@@ -2,8 +2,10 @@ import asyncio
 
 import httpx
 
+from app.agents.claude_orchestrator import ClaudeOrchestrator
 from app.agents.claude_client import ClaudeClient
 from app.core.settings import Settings
+from app.domain.models import OpportunityCandidate, RiskDecision, StrategyType
 
 
 class ErrorResponse:
@@ -25,7 +27,7 @@ def test_claude_client_falls_back_on_http_400(monkeypatch) -> None:
         return ErrorResponse(400, '{"error":{"message":"Your credit balance is too low to access the Anthropic API."}}')
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    settings = Settings(ANTHROPIC_API_KEY="test-key", ANTHROPIC_MODEL="bad-model")
+    settings = Settings(ANTHROPIC_API_KEY="test-key", ANTHROPIC_MODEL="bad-model", ENABLE_CLAUDE_AGENT=True)
     client = ClaudeClient(settings)
     response = asyncio.run(client.complete("system", "user"))
 
@@ -57,3 +59,58 @@ def test_claude_client_is_disabled_by_explicit_flag() -> None:
 
     assert response["error"]["message"] == "Claude runtime toggle is off."
     assert client.connection_status()["state"] == "disabled_by_operator"
+
+
+def test_execution_brief_falls_back_without_claude() -> None:
+    settings = Settings(ANTHROPIC_API_KEY="test-key", ENABLE_CLAUDE_AGENT=False)
+    orchestrator = ClaudeOrchestrator(ClaudeClient(settings))
+    opportunity = OpportunityCandidate(
+        strategy_type=StrategyType.SUM_TO_ONE,
+        market_id="m1",
+        question="Will test resolve yes?",
+        category="finance",
+        gross_edge=0.05,
+        net_edge=0.03,
+        fill_adjusted_edge=0.02,
+        depth_weighted_edge=0.02,
+        expected_profit=1.5,
+        capital_at_risk=50.0,
+        executable_size=50.0,
+        fill_confidence=0.9,
+        liquidity_score=0.8,
+        expected_holding_minutes=5.0,
+        rationale="Test rationale",
+    )
+    risk = RiskDecision(approved=True)
+    risk.sizing.notional = 10.0
+    risk.sizing.size_source = "auto"
+
+    brief = asyncio.run(orchestrator.execution_brief(opportunity, risk, "paper"))
+
+    assert "Deterministic execution brief" in brief
+
+
+def test_daily_summary_falls_back_with_operating_context() -> None:
+    settings = Settings(ANTHROPIC_API_KEY="test-key", ENABLE_CLAUDE_AGENT=False)
+    orchestrator = ClaudeOrchestrator(ClaudeClient(settings))
+
+    summary = asyncio.run(
+        orchestrator.daily_summary(
+            {
+                "trade_count": 0,
+                "approved_opportunities": 0,
+                "blocked_opportunities": 245,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "mode": "paper",
+                "using_demo_data": True,
+                "kill_switch_active": True,
+                "top_blockers": [("kill_switch", 245), ("stale_data", 245)],
+            }
+        )
+    )
+
+    assert "paper" in summary
+    assert "demo data active" in summary
+    assert "kill switch active" in summary
+    assert "Top blockers" in summary

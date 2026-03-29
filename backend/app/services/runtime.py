@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 from datetime import UTC, date, datetime
 import logging
+from collections import Counter
 
 from app.agents.claude_client import ClaudeClient
 from app.agents.claude_explainer_agent import ClaudeExplainerAgent
@@ -15,8 +16,10 @@ from app.analytics.pnl import realized_pnl, unrealized_pnl
 from app.analytics.sharpe import sharpe_ratio
 from app.core.settings import Settings
 from app.domain.models import (
+    AccountSnapshot,
     AgentNote,
     AppMode,
+    BankrollSource,
     DashboardSummary,
     ExecutionIntent,
     MarketQuote,
@@ -27,6 +30,9 @@ from app.domain.models import (
     OrderReport,
     PositionState,
     PositionSummary,
+    TradeSizeMode,
+    TradeSizeProfile,
+    trade_size_key,
 )
 from app.execution.fill_monitor import classify_fill_outcome
 from app.execution.order_router import OrderRouter
@@ -69,9 +75,29 @@ class TradingRuntime:
         self.current_mode: AppMode = settings.app_mode
         self.using_demo_data: bool = False
         self.last_scan_at: datetime | None = None
-        self.bankroll: float = 10_000.0
-        self.equity_curve: list[float] = [10_000.0]
+        self.paper_bankroll: float = float(settings.paper_bankroll)
+        self.live_trading_enabled: bool = bool(settings.enable_live_trading)
+        self.research_mode_enabled: bool = bool(settings.enable_research_mode)
+        self.market_orders_enabled: bool = bool(settings.enable_market_orders)
+        self.venue_account: AccountSnapshot = AccountSnapshot(
+            source=BankrollSource.VENUE_UNAVAILABLE,
+            label="Venue unavailable",
+            active_bankroll=0.0,
+            total_equity=0.0,
+            synced=False,
+            sync_error="Venue sync has not run yet.",
+        )
+        self.global_trade_size_profile = TradeSizeProfile(mode=TradeSizeMode.AUTO, fraction=None)
+        self.manual_trade_size_overrides: dict[str, TradeSizeProfile] = {}
+        self.equity_curve: list[float] = [self.paper_bankroll]
         self.background_task: asyncio.Task | None = None
+
+        self.runtime_config.setdefault("app", {})
+        self.runtime_config["app"]["enable_live_trading"] = self.live_trading_enabled
+        self.runtime_config["app"]["enable_research_mode"] = self.research_mode_enabled
+        self.runtime_config["app"]["enable_market_orders"] = self.market_orders_enabled
+        self.polymarket_client.set_live_trading_enabled(self.live_trading_enabled)
+        self.polymarket_client.set_market_orders_enabled(self.market_orders_enabled)
 
     async def startup(self) -> None:
         await self.scan_once()
@@ -89,13 +115,90 @@ class TradingRuntime:
             await asyncio.sleep(refresh_seconds)
             await self.scan_once()
 
+    def _paper_account_snapshot(self) -> AccountSnapshot:
+        open_positions = [position for position in self.positions if position.state != PositionState.CLOSED]
+        realized = realized_pnl(self.positions)
+        available_cash = max(self.paper_bankroll + realized - sum(position.entry_cost for position in open_positions), 0.0)
+        positions_value = sum(position.current_value for position in open_positions)
+        total_equity = available_cash + positions_value
+        return AccountSnapshot(
+            source=BankrollSource.SIMULATED,
+            label="Simulated",
+            available_cash=round(available_cash, 4),
+            positions_value=round(positions_value, 4),
+            total_equity=round(total_equity, 4),
+            active_bankroll=round(available_cash, 4),
+            synced=True,
+        )
+
+    def _active_account_snapshot(self) -> AccountSnapshot:
+        if self.current_mode is AppMode.LIVE:
+            if self.venue_account.synced:
+                return self.venue_account
+            return self.venue_account.model_copy(update={"active_bankroll": 0.0})
+        return self._paper_account_snapshot()
+
+    def _account_view(self) -> dict:
+        paper = self._paper_account_snapshot()
+        active = self._active_account_snapshot()
+        return {
+            "mode": self.current_mode.value,
+            "paper": paper.model_dump(mode="json"),
+            "venue": self.venue_account.model_dump(mode="json"),
+            "active": active.model_dump(mode="json"),
+        }
+
+    def _track_equity_point(self) -> None:
+        active = self._active_account_snapshot()
+        if self.current_mode is AppMode.LIVE and not self.venue_account.synced:
+            return
+        equity_point = active.total_equity or active.active_bankroll
+        if not self.equity_curve or abs(self.equity_curve[-1] - equity_point) > 1e-6:
+            self.equity_curve.append(equity_point)
+
+    def _trade_size_presets(self) -> list[float]:
+        presets = self.runtime_config.get("risk", {}).get("trade_size_presets", [0.02, 0.05, 0.10])
+        return [float(value) for value in presets]
+
+    def _rescore_opportunities(self) -> None:
+        risk_engine = RiskEngine(
+            runtime_config=self.runtime_config,
+            live_enabled=self.live_trading_enabled,
+            kill_switch_active=self.kill_switch.is_active(),
+            claude_enabled=self.claude_client.enabled,
+        )
+        self.opportunities = self.scanner.scan(
+            quotes=self.quotes,
+            books=self.books,
+            mode=self.current_mode,
+            risk_state=self._risk_state(),
+            risk_engine=risk_engine,
+            global_trade_size=self.global_trade_size_profile,
+            manual_trade_size_overrides=self.manual_trade_size_overrides,
+        )
+        self.repository.replace_opportunities(self.opportunities)
+
+    def _normalize_trade_size_profile(self, mode: TradeSizeMode, fraction: float | None) -> TradeSizeProfile:
+        if mode is TradeSizeMode.AUTO:
+            return TradeSizeProfile(mode=TradeSizeMode.AUTO, fraction=None)
+        if fraction is None:
+            raise ValueError("Fixed trade-size mode requires a fraction.")
+        return TradeSizeProfile(mode=TradeSizeMode.FIXED, fraction=max(0.0, float(fraction)))
+
+    def _opportunity_trade_size_key(self, opportunity: OpportunityCandidate) -> str:
+        return trade_size_key(opportunity.strategy_type, opportunity.market_id, opportunity.related_market_ids)
+
     def _risk_state(self) -> RiskState:
         drawdown = max_drawdown(self.equity_curve)
+        active_account = self._active_account_snapshot()
         return RiskState(
-            bankroll=self.bankroll,
+            bankroll=active_account.active_bankroll,
+            bankroll_source=active_account.source,
+            venue_sync_ok=self.current_mode is not AppMode.LIVE or self.venue_account.synced,
             realized_pnl_today=realized_pnl(self.positions),
             drawdown_fraction=drawdown,
             open_positions=[position for position in self.positions if position.state != PositionState.CLOSED],
+            external_position_value=self.venue_account.positions_value if self.current_mode is AppMode.LIVE and self.venue_account.synced else 0.0,
             api_spend_today=0.0,
             active_executions=0,
         )
@@ -134,22 +237,14 @@ class TradingRuntime:
         return [], {}
 
     async def scan_once(self) -> None:
-        self.quotes, self.books = await self._load_market_data()
-        risk_engine = RiskEngine(
-            runtime_config=self.runtime_config,
-            live_enabled=self.settings.enable_live_trading,
-            kill_switch_active=self.kill_switch.is_active(),
+        (self.quotes, self.books), self.venue_account = await asyncio.gather(
+            self._load_market_data(),
+            self.polymarket_client.fetch_account_snapshot(),
         )
-        self.opportunities = self.scanner.scan(
-            quotes=self.quotes,
-            books=self.books,
-            mode=self.current_mode,
-            risk_state=self._risk_state(),
-            risk_engine=risk_engine,
-        )
+        self._track_equity_point()
+        self._rescore_opportunities()
         self.last_scan_at = datetime.now(UTC)
         self.repository.save_market_snapshots(self.quotes)
-        self.repository.replace_opportunities(self.opportunities)
         await self._refresh_agent_notes()
 
     async def _refresh_agent_notes(self) -> None:
@@ -176,6 +271,20 @@ class TradingRuntime:
         if not quote:
             raise ValueError("Market quote missing.")
 
+        execution_brief = await self.claude_orchestrator.execution_brief(
+            opportunity=opportunity,
+            risk=opportunity.risk,
+            mode=self.current_mode.value,
+        )
+        self.repository.save_agent_note(
+            AgentNote(
+                note_type="execution_brief",
+                title=f"Execution brief {opportunity.opportunity_id}",
+                body=execution_brief,
+                related_id=opportunity.opportunity_id,
+            )
+        )
+
         unit_cost = (quote.yes_ask or quote.yes_price) + (quote.no_ask or quote.no_price)
         quantity = max(1.0, min(opportunity.executable_size, opportunity.risk.sizing.notional / max(unit_cost, 1e-6)))
         intent = ExecutionIntent(
@@ -186,7 +295,7 @@ class TradingRuntime:
                 OrderLeg(outcome="yes", side="buy", price=quote.yes_ask or quote.yes_price, quantity=quantity, token_id=quote.yes_token_id),
                 OrderLeg(outcome="no", side="buy", price=quote.no_ask or quote.no_price, quantity=quantity, token_id=quote.no_token_id),
             ],
-            notes="Deterministic arbitrage entry.",
+            notes=execution_brief,
         )
         report = await self.order_router.route(intent, self.books)
         self.orders.insert(0, report)
@@ -214,7 +323,7 @@ class TradingRuntime:
             )
             self.positions.insert(0, position)
             self.repository.save_position(position)
-            self.equity_curve.append(self.bankroll + realized_pnl(self.positions) + unrealized_pnl(self.positions))
+            self._track_equity_point()
 
         await self.notifications.dispatch(
             NotificationMessage(
@@ -256,8 +365,50 @@ class TradingRuntime:
             await self.scan_once()
         return {
             "mode": self.current_mode.value,
-            "live_execution_enabled": self.settings.enable_live_trading,
+            "live_execution_enabled": self.live_trading_enabled,
         }
+
+    async def _set_app_runtime_flag(self, key: str, enabled: bool, actor: str = "dashboard") -> dict:
+        app_cfg = self.runtime_config.setdefault("app", {})
+        previous = bool(app_cfg.get(key, False))
+        app_cfg[key] = bool(enabled)
+
+        if key == "enable_live_trading":
+            self.live_trading_enabled = bool(enabled)
+            self.polymarket_client.set_live_trading_enabled(enabled)
+        elif key == "enable_research_mode":
+            self.research_mode_enabled = bool(enabled)
+        elif key == "enable_market_orders":
+            self.market_orders_enabled = bool(enabled)
+            self.polymarket_client.set_market_orders_enabled(enabled)
+
+        if previous != bool(enabled):
+            self.repository.save_config_change(
+                actor=actor,
+                key=f"app.{key}",
+                previous_value=str(previous).lower(),
+                new_value=str(bool(enabled)).lower(),
+            )
+            await self.notifications.dispatch(
+                NotificationMessage(
+                    level=NotificationLevel.WARNING if key == "enable_live_trading" and enabled else NotificationLevel.INFO,
+                    title="Runtime setting changed",
+                    body=f"{key} changed from {previous} to {bool(enabled)}.",
+                )
+            )
+            if key == "enable_live_trading":
+                self._rescore_opportunities()
+                await self._refresh_agent_notes()
+        return self.get_settings_view()["app"]
+
+    async def set_live_trading_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
+        return await self._set_app_runtime_flag("enable_live_trading", enabled, actor)
+
+    async def set_research_mode_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
+        return await self._set_app_runtime_flag("enable_research_mode", enabled, actor)
+
+    async def set_market_orders_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
+        return await self._set_app_runtime_flag("enable_market_orders", enabled, actor)
 
     async def set_claude_agent_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
         previous_enabled = self.claude_client.operator_enabled
@@ -278,6 +429,56 @@ class TradingRuntime:
             )
         return self.claude_client.connection_status()
 
+    async def set_trade_size_profile(self, mode: TradeSizeMode, fraction: float | None, actor: str = "dashboard") -> dict:
+        previous = self.global_trade_size_profile.model_dump(mode="json")
+        self.global_trade_size_profile = self._normalize_trade_size_profile(mode, fraction)
+        current = self.global_trade_size_profile.model_dump(mode="json")
+        if previous != current:
+            self.repository.save_config_change(
+                actor=actor,
+                key="risk.trade_size_profile",
+                previous_value=str(previous),
+                new_value=str(current),
+            )
+            self._rescore_opportunities()
+            await self._refresh_agent_notes()
+        return self.get_settings_view()["trade_sizing"]
+
+    async def set_opportunity_trade_size(
+        self,
+        opportunity_id: str,
+        mode: TradeSizeMode,
+        fraction: float | None,
+        actor: str = "dashboard",
+    ) -> dict:
+        opportunity = next((item for item in self.opportunities if item.opportunity_id == opportunity_id), None)
+        if not opportunity:
+            raise ValueError("Opportunity is not available.")
+
+        override_key = self._opportunity_trade_size_key(opportunity)
+        previous = self.manual_trade_size_overrides.get(override_key, TradeSizeProfile(mode=TradeSizeMode.AUTO)).model_dump(mode="json")
+        if mode is TradeSizeMode.AUTO:
+            self.manual_trade_size_overrides.pop(override_key, None)
+            current_profile = TradeSizeProfile(mode=TradeSizeMode.AUTO)
+        else:
+            current_profile = self._normalize_trade_size_profile(mode, fraction)
+            self.manual_trade_size_overrides[override_key] = current_profile
+
+        current = current_profile.model_dump(mode="json")
+        if previous != current:
+            self.repository.save_config_change(
+                actor=actor,
+                key=f"risk.trade_size_override.{override_key}",
+                previous_value=str(previous),
+                new_value=str(current),
+            )
+            self._rescore_opportunities()
+            await self._refresh_agent_notes()
+        return {
+            "opportunity_id": opportunity_id,
+            "override": current,
+        }
+
     def get_health(self) -> dict:
         return {
             "status": "ok",
@@ -287,12 +488,15 @@ class TradingRuntime:
             "kill_switch": self.kill_switch.is_active(),
             "claude_enabled": self.claude_client.enabled,
             "claude": self.claude_client.connection_status(),
+            "account": self._account_view(),
         }
 
     def get_overview(self) -> DashboardSummary:
+        active_account = self._active_account_snapshot()
         blocked = sum(1 for item in self.opportunities if item.status.value == "blocked")
         return DashboardSummary(
-            bankroll=self.bankroll,
+            bankroll=active_account.active_bankroll,
+            bankroll_source=active_account.source,
             realized_pnl=realized_pnl(self.positions),
             unrealized_pnl=unrealized_pnl(self.positions),
             active_positions=sum(1 for item in self.positions if item.state != PositionState.CLOSED),
@@ -315,26 +519,65 @@ class TradingRuntime:
         return [order.model_dump(mode="json") for order in self.orders] or self.repository.list_orders()
 
     def get_risk(self) -> dict:
+        active_account = self._active_account_snapshot()
         open_positions = [position for position in self.positions if position.state != PositionState.CLOSED]
         category_exposure: dict[str, float] = {}
         for position in open_positions:
             category_exposure[position.category] = category_exposure.get(position.category, 0.0) + position.entry_cost
+        with suppress(Exception):
+            open_risk_checks = [item["title"] for item in self.repository.list_notifications(limit=5)]
+            return {
+                "bankroll": active_account.active_bankroll,
+                "bankroll_source": active_account.source.value,
+                "drawdown_fraction": max_drawdown(self.equity_curve),
+                "daily_loss": realized_pnl(self.positions),
+                "category_exposure": category_exposure,
+                "kill_switch": self.kill_switch.is_active(),
+                "open_risk_checks": open_risk_checks,
+                "account": self._account_view(),
+            }
         return {
-            "bankroll": self.bankroll,
+            "bankroll": active_account.active_bankroll,
+            "bankroll_source": active_account.source.value,
             "drawdown_fraction": max_drawdown(self.equity_curve),
             "daily_loss": realized_pnl(self.positions),
             "category_exposure": category_exposure,
             "kill_switch": self.kill_switch.is_active(),
-            "open_risk_checks": [item["title"] for item in self.repository.list_notifications(limit=5)],
+            "open_risk_checks": [],
+            "account": self._account_view(),
         }
 
     async def get_agent_summary(self) -> dict:
+        blocked_reason_counts = Counter()
+        approved_count = 0
+        blocked_count = 0
+        for opportunity in self.opportunities:
+            if opportunity.risk and opportunity.risk.approved:
+                approved_count += 1
+            if opportunity.status.value == "blocked":
+                blocked_count += 1
+            if opportunity.risk:
+                blocked_reason_counts.update(opportunity.risk.blocked_by)
+
         summary = await self.claude_orchestrator.daily_summary(
             {
                 "trade_count": len(self.orders),
-                "missed_opportunities": sum(1 for item in self.opportunities if item.status.value == "blocked"),
+                "missed_opportunities": blocked_count,
                 "realized_pnl": realized_pnl(self.positions),
                 "unrealized_pnl": unrealized_pnl(self.positions),
+                "mode": self.current_mode.value,
+                "using_demo_data": self.using_demo_data,
+                "kill_switch_active": self.kill_switch.is_active(),
+                "live_execution_enabled": self.live_trading_enabled,
+                "research_mode_enabled": self.research_mode_enabled,
+                "market_orders_enabled": self.market_orders_enabled,
+                "claude_enabled": self.claude_client.enabled,
+                "venue_synced": self.venue_account.synced,
+                "venue_cash": self.venue_account.available_cash,
+                "active_bankroll": self._active_account_snapshot().active_bankroll,
+                "approved_opportunities": approved_count,
+                "blocked_opportunities": blocked_count,
+                "top_blockers": blocked_reason_counts.most_common(5),
             }
         )
         return {
@@ -362,10 +605,11 @@ class TradingRuntime:
         }
 
     def get_settings_view(self) -> dict:
+        risk_cfg = self.runtime_config.get("risk", {})
         return {
             "app": self.runtime_config.get("app", {}),
             "scanner": self.runtime_config.get("scanner", {}),
-            "risk": self.runtime_config.get("risk", {}),
+            "risk": risk_cfg,
             "current_mode": self.current_mode.value,
             "using_demo_data": self.using_demo_data,
             "available_modes": [mode.value for mode in AppMode],
@@ -376,6 +620,13 @@ class TradingRuntime:
                 "claude_agent_default": self.settings.enable_claude_agent,
             },
             "claude": self.claude_client.connection_status(),
+            "account": self._account_view(),
+            "trade_sizing": {
+                "global": self.global_trade_size_profile.model_dump(mode="json"),
+                "presets": self._trade_size_presets(),
+                "hard_cap": float(risk_cfg.get("max_position_bankroll_fraction", 0.05)),
+                "estimated_claude_cost_per_trade_usd": float(risk_cfg.get("estimated_claude_cost_per_trade_usd", 0.0)),
+            },
         }
 
     async def manual_refresh(self) -> dict:

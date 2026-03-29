@@ -18,6 +18,17 @@ class AppMode(str, Enum):
     LIVE = "live"
 
 
+class BankrollSource(str, Enum):
+    SIMULATED = "simulated"
+    VENUE_SYNCED = "venue_synced"
+    VENUE_UNAVAILABLE = "venue_unavailable"
+
+
+class TradeSizeMode(str, Enum):
+    AUTO = "auto"
+    FIXED = "fixed"
+
+
 class StrategyType(str, Enum):
     SUM_TO_ONE = "sum_to_one"
     ORDERBOOK_ARB = "orderbook_arb"
@@ -113,12 +124,43 @@ class MarketQuote(BaseModel):
         return delta.total_seconds() / 60
 
 
+class AccountSnapshot(BaseModel):
+    source: BankrollSource = BankrollSource.SIMULATED
+    label: str = "Simulated"
+    wallet_address: str | None = None
+    proxy_wallet: str | None = None
+    available_cash: float = 0.0
+    positions_value: float = 0.0
+    total_equity: float = 0.0
+    active_bankroll: float = 0.0
+    currency: str = "USD"
+    synced: bool = False
+    last_synced_at: datetime | None = None
+    sync_error: str | None = None
+
+
+class TradeSizeProfile(BaseModel):
+    mode: TradeSizeMode = TradeSizeMode.AUTO
+    fraction: float | None = None
+
+
+def trade_size_key(strategy_type: StrategyType | str, market_id: str, related_market_ids: list[str] | None = None) -> str:
+    strategy_value = strategy_type.value if isinstance(strategy_type, StrategyType) else str(strategy_type)
+    related = ",".join(sorted(related_market_ids or []))
+    return f"{strategy_value}:{market_id}:{related}"
+
+
 class ProposedSize(BaseModel):
     bankroll_fraction: float = 0.0
+    requested_fraction: float = 0.0
     notional: float = 0.0
     units: float = 0.0
     kelly_fraction: float = 0.0
     capped_fraction: float = 0.0
+    size_source: str = "auto"
+    estimated_profit: float = 0.0
+    estimated_ai_cost: float = 0.0
+    estimated_profit_after_ai_cost: float = 0.0
 
 
 class RiskDecision(BaseModel):
@@ -228,6 +270,7 @@ class NotificationMessage(BaseModel):
 
 class DashboardSummary(BaseModel):
     bankroll: float
+    bankroll_source: BankrollSource = BankrollSource.SIMULATED
     realized_pnl: float
     unrealized_pnl: float
     active_positions: int
@@ -235,4 +278,3 @@ class DashboardSummary(BaseModel):
     kill_switch: bool
     mode: AppMode
     concurrent_positions: int
-

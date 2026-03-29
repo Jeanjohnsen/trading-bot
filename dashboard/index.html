@@ -21,6 +21,7 @@
         </div>
         <div class="hero-actions">
           <div class="status-chip" id="mode-chip">Mode: loading</div>
+          <button class="action-button secondary" id="layout-settings-button">Layout settings</button>
           <button class="action-button" id="refresh-button">Refresh Scan</button>
           <button class="action-button danger" id="kill-switch-button">Toggle Kill Switch</button>
         </div>
@@ -28,8 +29,14 @@
 
       <section class="overview-grid" id="overview-grid"></section>
 
-      <div class="content-grid">
-        <section class="panel spotlight">
+      <div class="workspace-columns" id="workspace-columns">
+        <div class="workspace-column" data-workspace-column="1"></div>
+        <div class="workspace-column" data-workspace-column="2"></div>
+        <div class="workspace-column" data-workspace-column="3"></div>
+      </div>
+
+      <div class="workspace-panel-bank" id="workspace-panel-bank">
+        <section class="panel spotlight workspace-feed panel-size-tall" data-panel-key="feed">
           <div class="panel-header">
             <div>
               <p class="eyebrow">Ranked Feed</p>
@@ -37,10 +44,10 @@
             </div>
             <p class="panel-meta" id="scan-timestamp">Waiting for scan</p>
           </div>
-          <div class="feed-list" id="opportunity-feed"></div>
+          <div class="feed-list panel-scroll" id="opportunity-feed"></div>
         </section>
 
-        <section class="panel detail-panel">
+        <section class="panel detail-panel workspace-detail panel-size-tall" data-panel-key="detail">
           <div class="panel-header">
             <div>
               <p class="eyebrow">Execution View</p>
@@ -48,62 +55,77 @@
             </div>
             <button class="action-button secondary" id="execute-button">Paper Execute</button>
           </div>
-          <div id="market-detail"></div>
+          <div class="panel-scroll" id="market-detail"></div>
         </section>
-      </div>
 
-      <div class="content-grid secondary-grid">
-        <section class="panel">
+        <section class="panel workspace-risk panel-size-compact" data-panel-key="risk">
           <div class="panel-header">
             <div>
               <p class="eyebrow">Risk Controls</p>
               <h2>Risk Panel</h2>
             </div>
           </div>
-          <div id="risk-panel"></div>
+          <div class="panel-scroll" id="risk-panel"></div>
         </section>
 
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Agent Layer</p>
-              <h2>Claude Insights</h2>
-            </div>
-          </div>
-          <div id="agent-panel"></div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">System Config</p>
-              <h2>Settings</h2>
-            </div>
-          </div>
-          <div id="settings-panel"></div>
-        </section>
-      </div>
-
-      <div class="content-grid secondary-grid">
-        <section class="panel wide-panel">
+        <section class="panel workspace-orders panel-size-standard" data-panel-key="orders">
           <div class="panel-header">
             <div>
               <p class="eyebrow">Execution History</p>
               <h2>Trade Blotter</h2>
             </div>
           </div>
-          <div id="orders-table"></div>
+          <div class="panel-scroll" id="orders-table"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel workspace-agent panel-size-standard" data-panel-key="agent">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Agent Layer</p>
+              <h2>Claude Insights</h2>
+            </div>
+          </div>
+          <div class="panel-scroll" id="agent-panel"></div>
+        </section>
+
+        <section class="panel workspace-settings panel-size-standard" data-panel-key="settings">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">System Config</p>
+              <h2>Settings</h2>
+            </div>
+          </div>
+          <div class="panel-scroll" id="settings-panel"></div>
+        </section>
+
+        <section class="panel workspace-positions panel-size-compact" data-panel-key="positions">
           <div class="panel-header">
             <div>
               <p class="eyebrow">Portfolio</p>
               <h2>Positions</h2>
             </div>
           </div>
-          <div id="positions-panel"></div>
+          <div class="panel-scroll" id="positions-panel"></div>
         </section>
+      </div>
+
+      <div class="layout-overlay" id="layout-overlay" hidden>
+        <div class="layout-modal" role="dialog" aria-modal="true" aria-labelledby="layout-modal-title">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Workspace Editor</p>
+              <h2 id="layout-modal-title">Arrange Columns And Sizes</h2>
+            </div>
+            <div class="layout-modal-actions">
+              <button class="action-button secondary" id="layout-reset-button" type="button">Reset layout</button>
+              <button class="action-button" id="layout-close-button" type="button">Done</button>
+            </div>
+          </div>
+          <p class="detail-copy layout-modal-copy">
+            Drag a view card into another column, change its height, and fine-tune the stack order with the arrow buttons. Changes are stored locally in this browser.
+          </p>
+          <div class="layout-editor-grid" id="layout-editor-grid"></div>
+        </div>
       </div>
     </div>
 

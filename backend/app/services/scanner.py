@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.domain.models import AppMode, MarketQuote, OpportunityCandidate, OpportunityStatus
+from app.domain.models import AppMode, MarketQuote, OpportunityCandidate, OpportunityStatus, TradeSizeProfile, TradeSizeMode, trade_size_key
 from app.risk.validate_risk import RiskEngine, RiskState
 from app.strategies.cross_market_arb import cross_market_opportunities
 from app.strategies.orderbook_arb import orderbook_micro_arb
@@ -27,6 +27,8 @@ class ScannerService:
         mode: AppMode,
         risk_state: RiskState,
         risk_engine: RiskEngine,
+        global_trade_size: TradeSizeProfile | None = None,
+        manual_trade_size_overrides: dict[str, TradeSizeProfile] | None = None,
     ) -> list[OpportunityCandidate]:
         if not quotes:
             return []
@@ -59,6 +61,18 @@ class ScannerService:
             quote = next((item for item in quotes if item.market_id == opportunity.market_id), quotes[0])
             data_age = self._data_age_seconds(opportunity.market_id, books)
             estimated_slippage = max(0.001, 0.012 - (opportunity.fill_confidence * 0.01))
+            manual_profile = (manual_trade_size_overrides or {}).get(
+                trade_size_key(opportunity.strategy_type, opportunity.market_id, opportunity.related_market_ids)
+            )
+            if manual_profile and manual_profile.mode is TradeSizeMode.FIXED and manual_profile.fraction is not None:
+                operator_fraction_override = manual_profile.fraction
+                size_source = "manual"
+            elif global_trade_size and global_trade_size.mode is TradeSizeMode.FIXED and global_trade_size.fraction is not None:
+                operator_fraction_override = global_trade_size.fraction
+                size_source = "global"
+            else:
+                operator_fraction_override = None
+                size_source = "auto"
             risk = risk_engine.evaluate(
                 opportunity=opportunity,
                 quote=quote,
@@ -66,6 +80,8 @@ class ScannerService:
                 mode=mode,
                 data_age_seconds=data_age,
                 estimated_slippage=estimated_slippage,
+                operator_fraction_override=operator_fraction_override,
+                size_source=size_source,
             )
             if opportunity.strategy_type.value == "cross_market_arb":
                 risk.approved = False

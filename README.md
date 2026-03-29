@@ -83,6 +83,29 @@ This means Claude can still be enabled in `paper`, `live`, or `backtest` modes w
 
 Recommended setting right now: `APP_MODE=paper`.
 
+## Bankroll sources
+
+- `PAPER_BANKROLL`
+  Sets the simulated bankroll used in `paper` and `backtest` modes.
+- `POLYMARKET_WALLET_ADDRESS`
+  Optional explicit wallet address for venue balance sync. If omitted, the app falls back to `POLYMARKET_RELAYER_API_KEY_ADDRESS`.
+- `POLYMARKET_PROXY_WALLET`
+  Optional override for the Polymarket proxy wallet. If omitted, the app will try to resolve the proxy wallet from Polymarket's public profile API.
+- In `paper` mode, risk sizing uses the simulated bankroll and the UI labels it clearly as `Simulated`.
+- In `live` mode, risk sizing uses the synced Polymarket venue cash balance and the UI labels it as `Venue-synced`.
+- The dashboard also shows venue positions value separately so you can see how much cash is available to deploy versus how much is already tied up on the venue.
+
+## Trade sizing
+
+- `Auto Kelly`
+  Uses the deterministic Kelly-style sizing logic already built into the risk engine.
+- `Global fixed size`
+  The Settings panel can switch the whole app to a fixed bankroll fraction such as `2%`, `5%`, or `10%`.
+- `Manual override`
+  The Execution View can override sizing for a single trade from the dashboard.
+- All fixed sizing is still clipped by the hard cap in `risk.max_position_bankroll_fraction`.
+- The risk engine also checks that projected expected profit clears the configured Claude/API cost floor before approving a trade.
+
 ## Safety defaults
 
 - Live trading is disabled by default.

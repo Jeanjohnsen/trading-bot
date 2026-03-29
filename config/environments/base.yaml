@@ -24,11 +24,12 @@ risk:
   min_liquidity_score: 0.35
   api_budget_daily_usd: 12.0
   fractional_kelly: 0.25
+  trade_size_presets: [0.02, 0.05, 0.10]
   execution_risk_buffer: 0.005
   fee_rate: 0.0
   latency_buffer: 0.002
+  estimated_claude_cost_per_trade_usd: 0.02
 notifications:
   enable_webhook: false
   enable_discord: false
   enable_telegram: false
-

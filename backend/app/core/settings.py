@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, alias="APP_PORT")
     app_mode: AppMode = Field(default=AppMode.PAPER, alias="APP_MODE")
     app_base_url: str = Field(default="http://127.0.0.1:8000", alias="APP_BASE_URL")
+    paper_bankroll: float = Field(default=10_000.0, alias="PAPER_BANKROLL")
 
     database_url: str = Field(default="sqlite:///./storage/poly_arb_agent.db", alias="DATABASE_URL")
 
@@ -60,9 +61,13 @@ class Settings(BaseSettings):
     enable_market_orders: bool = Field(default=False, alias="ENABLE_MARKET_ORDERS")
 
     polymarket_gamma_url: str = Field(default="https://gamma-api.polymarket.com", alias="POLYMARKET_GAMMA_URL")
+    polymarket_data_url: str = Field(default="https://data-api.polymarket.com", alias="POLYMARKET_DATA_URL")
     polymarket_clob_url: str = Field(default="https://clob.polymarket.com", alias="POLYMARKET_CLOB_URL")
     polymarket_relayer_api_key: str = Field(default="", alias="POLYMARKET_RELAYER_API_KEY")
     polymarket_relayer_api_key_address: str = Field(default="", alias="POLYMARKET_RELAYER_API_KEY_ADDRESS")
+    polymarket_wallet_address: str = Field(default="", alias="POLYMARKET_WALLET_ADDRESS")
+    polymarket_proxy_wallet: str = Field(default="", alias="POLYMARKET_PROXY_WALLET")
+    polygon_rpc_url: str = Field(default="https://polygon-rpc.com", alias="POLYGON_RPC_URL")
 
     anthropic_api_url: str = Field(default="https://api.anthropic.com/v1/messages", alias="ANTHROPIC_API_URL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
@@ -86,6 +91,7 @@ class Settings(BaseSettings):
                 "env": self.app_env,
                 "mode": self.app_mode.value,
                 "base_url": self.app_base_url,
+                "paper_bankroll": self.paper_bankroll,
                 "bootstrap_demo_data": self.bootstrap_demo_data,
                 "enable_claude_agent": self.enable_claude_agent,
                 "enable_research_mode": self.enable_research_mode,
