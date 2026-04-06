@@ -20,14 +20,12 @@ from app.domain.models import (
     AppMode,
     BankrollSource,
     DashboardSummary,
-    ExecutionIntent,
     ForecastSnapshot,
     MarketQuote,
     MarketResolution,
     NotificationLevel,
     NotificationMessage,
     OpportunityCandidate,
-    OrderLeg,
     OrderReport,
     PositionState,
     PositionSummary,
@@ -36,6 +34,7 @@ from app.domain.models import (
     trade_size_key,
 )
 from app.execution.fill_monitor import classify_fill_outcome
+from app.execution.intent_builder import build_execution_intent
 from app.execution.order_router import OrderRouter
 from app.execution.paper_broker import PaperBroker
 from app.execution.polymarket_client import PolymarketClient
@@ -44,6 +43,7 @@ from app.risk.kill_switch import KillSwitch
 from app.risk.validate_risk import RiskEngine, RiskState
 from app.services.demo_data import build_demo_books, build_demo_quotes
 from app.services.scanner import ScannerService
+from app.strategies.research_signal import research_signal_metrics
 from app.storage.repositories import Repository
 
 logger = logging.getLogger(__name__)
@@ -306,12 +306,7 @@ class TradingRuntime:
     def _build_forecast_snapshots(self, quotes: list[MarketQuote]) -> list[ForecastSnapshot]:
         forecasts: list[ForecastSnapshot] = []
         for quote in quotes:
-            market_probability = min(max(float(quote.yes_price), 0.01), 0.99)
-            momentum_adjustment = max(min(float(quote.recent_move or 0.0) * 0.15, 0.08), -0.08)
-            liquidity_adjustment = (quote.liquidity_score - 0.5) * 0.04
-            forecast_probability = min(max(market_probability + momentum_adjustment + liquidity_adjustment, 0.01), 0.99)
-            confidence = min(max(0.35 + (quote.liquidity_score * 0.45), 0.35), 0.9)
-            edge = forecast_probability - market_probability
+            metrics = research_signal_metrics(quote)
             forecasts.append(
                 ForecastSnapshot(
                     market_id=quote.market_id,
@@ -319,10 +314,10 @@ class TradingRuntime:
                     category=quote.category,
                     source="deterministic_research_v1",
                     mode=self.current_mode,
-                    forecast_probability=round(forecast_probability, 6),
-                    market_probability=round(market_probability, 6),
-                    confidence=round(confidence, 6),
-                    edge=round(edge, 6),
+                    forecast_probability=float(metrics["forecast_probability"]),
+                    market_probability=float(metrics["market_probability"]),
+                    confidence=float(metrics["confidence"]),
+                    edge=float(metrics["edge"]),
                     rationale="Deterministic research forecast using market-implied probability with bounded momentum/liquidity adjustment.",
                     expires_at=quote.expiry,
                 )
@@ -367,17 +362,12 @@ class TradingRuntime:
             )
         )
 
-        unit_cost = (quote.yes_ask or quote.yes_price) + (quote.no_ask or quote.no_price)
-        quantity = max(1.0, min(opportunity.executable_size, opportunity.risk.sizing.notional / max(unit_cost, 1e-6)))
-        intent = ExecutionIntent(
-            opportunity_id=opportunity.opportunity_id,
-            market_id=opportunity.market_id,
+        intent = build_execution_intent(
+            opportunity=opportunity,
+            quote=quote,
             mode=self.current_mode,
-            legs=[
-                OrderLeg(outcome="yes", side="buy", price=quote.yes_ask or quote.yes_price, quantity=quantity, token_id=quote.yes_token_id),
-                OrderLeg(outcome="no", side="buy", price=quote.no_ask or quote.no_price, quantity=quantity, token_id=quote.no_token_id),
-            ],
             notes=execution_brief,
+            target_notional=opportunity.risk.sizing.notional,
         )
         report = await self.order_router.route(intent, self.books)
         self.orders.insert(0, report)
@@ -478,7 +468,7 @@ class TradingRuntime:
                     body=f"{key} changed from {previous} to {bool(enabled)}.",
                 )
             )
-            if key == "enable_live_trading":
+            if key in {"enable_live_trading", "enable_research_mode"}:
                 self._rescore_opportunities()
                 await self._refresh_agent_notes()
         return self.get_settings_view()["app"]

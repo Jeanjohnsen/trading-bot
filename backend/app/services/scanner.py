@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.domain.models import AppMode, MarketQuote, OpportunityCandidate, OpportunityStatus, TradeSizeProfile, TradeSizeMode, trade_size_key
+from app.domain.models import AppMode, MarketQuote, OpportunityCandidate, OpportunityStatus, StrategyType, TradeSizeProfile, TradeSizeMode, trade_size_key
 from app.risk.validate_risk import RiskEngine, RiskState
 from app.strategies.cross_market_arb import cross_market_opportunities
 from app.strategies.orderbook_arb import orderbook_micro_arb
+from app.strategies.research_signal import research_signal_opportunity
 from app.strategies.sum_to_one import direct_sum_to_one_opportunity
 
 
@@ -34,9 +35,12 @@ class ScannerService:
             return []
 
         risk_cfg = self.runtime_config.get("risk", {})
+        app_cfg = self.runtime_config.get("app", {})
         fee_rate = float(risk_cfg.get("fee_rate", 0.0))
         slippage_buffer = float(risk_cfg.get("slippage_tolerance", 0.01))
         execution_buffer = float(risk_cfg.get("execution_risk_buffer", 0.005)) + float(risk_cfg.get("latency_buffer", 0.002))
+        research_enabled = bool(app_cfg.get("enable_research_mode", False))
+        research_signal_min_edge = float(risk_cfg.get("research_signal_min_edge", risk_cfg.get("min_net_edge", 0.015)))
 
         opportunities: list[OpportunityCandidate] = []
         for quote in quotes:
@@ -55,11 +59,25 @@ class ScannerService:
             if depth:
                 opportunities.append(depth)
 
+            if research_enabled:
+                research = research_signal_opportunity(
+                    quote,
+                    fee_rate=fee_rate,
+                    slippage_buffer=slippage_buffer,
+                    execution_risk_buffer=execution_buffer,
+                    min_signal_edge=research_signal_min_edge,
+                )
+                if research:
+                    opportunities.append(research)
+
         opportunities.extend(cross_market_opportunities(quotes, buffer=execution_buffer + slippage_buffer))
 
         for opportunity in opportunities:
             quote = next((item for item in quotes if item.market_id == opportunity.market_id), quotes[0])
-            data_age = self._data_age_seconds(opportunity.market_id, books)
+            if opportunity.strategy_type is StrategyType.RESEARCH_SIGNAL:
+                data_age = max((datetime.now(UTC) - quote.last_updated).total_seconds(), 0.0)
+            else:
+                data_age = self._data_age_seconds(opportunity.market_id, books)
             estimated_slippage = max(0.001, 0.012 - (opportunity.fill_confidence * 0.01))
             manual_profile = (manual_trade_size_overrides or {}).get(
                 trade_size_key(opportunity.strategy_type, opportunity.market_id, opportunity.related_market_ids)

@@ -753,6 +753,7 @@ function renderMarketDetail() {
     risk.sizing?.estimated_profit_after_ai_cost ?? scaledExpectedProfit - estimatedAiCost
   );
   const isCrossMarket = selected.strategy_type === "cross_market_arb";
+  const isResearchSignal = selected.strategy_type === "research_signal";
   const groupedProbability = Number(selected.evidence?.summed_yes_probability || 0);
   const memberCount = Number(selected.evidence?.member_count || 0);
   const pricingBlock = isCrossMarket
@@ -765,6 +766,19 @@ function renderMarketDetail() {
             <div class="detail-row"><span>Net edge</span><strong>${formatPercent(selected.net_edge)}</strong></div>
           </div>
           <p class="detail-copy">Cross-market opportunities are scored from broken grouped probability mass, not a single YES/NO book.</p>
+        </div>
+      `
+    : isResearchSignal
+      ? `
+        <div class="detail-block">
+          <div class="eyebrow">Research Signal</div>
+          <div class="detail-stat-list">
+            <div class="detail-row"><span>Direction</span><strong>${String(selected.evidence?.direction || "yes").toUpperCase()}</strong></div>
+            <div class="detail-row"><span>Forecast</span><strong>${formatPercent(selected.evidence?.forecast_probability || 0)}</strong></div>
+            <div class="detail-row"><span>Market</span><strong>${formatPercent(selected.evidence?.market_probability || 0)}</strong></div>
+            <div class="detail-row"><span>Net edge</span><strong>${formatPercent(selected.net_edge)}</strong></div>
+          </div>
+          <p class="detail-copy">This is a directional trade generated from the deterministic research forecast, not a paired YES/NO arbitrage leg set.</p>
         </div>
       `
     : `
@@ -1010,6 +1024,11 @@ function renderSettings() {
         ${
           settings.current_mode === "live" && settings.app?.enable_live_trading !== true
             ? `<p class="detail-copy" style="margin-top:0.7rem;">Live mode is selected, but live execution is still blocked until the live execution gate is enabled below.</p>`
+            : ""
+        }
+        ${
+          settings.current_mode === "live" && settings.app?.enable_live_trading === true
+            ? `<p class="detail-copy" style="margin-top:0.7rem;">Live mode and the gate are enabled, but venue posting is still signer-gated in this MVP. Research and arb signals will surface here, but actual Polymarket posting remains blocked until wallet signing is validated.</p>`
             : ""
         }
         <div class="runtime-toggle-stack">

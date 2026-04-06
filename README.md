@@ -21,6 +21,7 @@ POLY-ARB AGENT is a production-minded MVP for structural prediction-market tradi
   - trade explanations
   - post-trade reviews
   - daily recap summaries
+- Directional research-signal opportunities derived from deterministic forecast snapshots
 - SQLite-first storage with a Postgres-ready shape
 - Forecast logging and analytics with:
   - deterministic research forecast snapshots
@@ -85,7 +86,7 @@ There are four separate control layers in the app:
 - Data source
   `BOOTSTRAP_DEMO_DATA=true` allows demo/fallback market data if live venue data is unavailable.
 - Research / forecasting
-  `ENABLE_RESEARCH_MODE=true` turns on deterministic research forecast logging and resolution tracking without requiring live trading.
+  `ENABLE_RESEARCH_MODE=true` turns on deterministic research forecast logging, resolution tracking, and directional research-signal opportunities without requiring live trading.
 
 ## App modes
 
@@ -105,7 +106,7 @@ Recommended setting right now: `APP_MODE=paper`.
 - Data collection only
   Use `APP_MODE=paper`, keep `ENABLE_LIVE_TRADING=false`, and leave the kill switch active. This gives you real market ingestion and logging without live execution.
 - Research and prediction tracking
-  Keep `APP_MODE=paper`, set `ENABLE_RESEARCH_MODE=true`, and optionally enable Claude if you want research briefs. Forecasts will be logged, later matched with resolved market outcomes, and included in Brier analytics.
+  Keep `APP_MODE=paper`, set `ENABLE_RESEARCH_MODE=true`, and optionally enable Claude if you want research briefs. Forecasts will be logged, later matched with resolved market outcomes, included in Brier analytics, and can surface directional research-signal opportunities in the execution feed.
 - Paper execution
   Use `APP_MODE=paper` with live trading still off. This is the correct place to validate sizing, slippage assumptions, and risk blocks.
 - Live execution
@@ -160,7 +161,7 @@ This means you can collect data and evaluate forecast quality before enabling an
 - Actual order signing and live posting to Polymarket
 - Emergency unwind using market orders
 - Cross-market group execution with strict atomicity guarantees
-- Research-driven discretionary trades
+- Claude-driven discretionary trades
 - Automated config mutation by any model
 - Full historical backtest replay engine
 
