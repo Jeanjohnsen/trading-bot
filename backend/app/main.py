@@ -34,7 +34,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(api_router)
-app.mount("/assets", StaticFiles(directory=dashboard_dir / "assets"), name="assets")
+
+assets_dir = dashboard_dir / "assets"
+if assets_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
 
 @app.get("/", include_in_schema=False)
