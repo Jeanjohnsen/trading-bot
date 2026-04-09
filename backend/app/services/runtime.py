@@ -29,6 +29,7 @@ from app.domain.models import (
     OrderReport,
     PositionState,
     PositionSummary,
+    StrategyType,
     TradeSizeMode,
     TradeSizeProfile,
     trade_size_key,
@@ -343,6 +344,8 @@ class TradingRuntime:
         opportunity = next((item for item in self.opportunities if item.opportunity_id == opportunity_id), None)
         if not opportunity or not opportunity.risk or not opportunity.risk.approved:
             raise ValueError("Opportunity is not executable.")
+        if self.current_mode is AppMode.LIVE and opportunity.strategy_type is not StrategyType.RESEARCH_SIGNAL:
+            raise ValueError("Live execution currently supports only research_signal opportunities.")
 
         quote = next((item for item in self.quotes if item.market_id == opportunity.market_id), None)
         if not quote:
@@ -691,6 +694,7 @@ class TradingRuntime:
             "preset_files": ["all", "weather", "crypto", "finance", "politics", "sports"],
             "secrets": {
                 "polymarket_relayer_key_present": bool(self.settings.polymarket_relayer_api_key),
+                "polymarket_private_key_present": bool(self.settings.polymarket_private_key),
                 "claude_key_present": bool(self.settings.anthropic_api_key),
                 "claude_agent_default": self.settings.enable_claude_agent,
             },

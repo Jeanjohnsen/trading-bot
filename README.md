@@ -95,7 +95,7 @@ There are four separate control layers in the app:
 - `paper`
   Safe default. Signals, risk checks, and execution flow still run, but orders are simulated through the paper broker instead of being sent live.
 - `live`
-  Intended for real trading. This mode is still guarded by deterministic risk checks and also requires `ENABLE_LIVE_TRADING=true`. In the current MVP, live posting is intentionally still gated until wallet signing and venue-specific execution are fully validated.
+  Intended for real trading. This mode is still guarded by deterministic risk checks and also requires `ENABLE_LIVE_TRADING=true`. The current MVP supports real Polymarket live posting for single-leg `research_signal` opportunities only. Multi-leg strategies remain non-live until routing and leg-risk controls are validated.
 - `backtest`
   Reserved for historical replay and offline simulation. The architecture is ready for it, but the MVP does not yet include a full standalone backtest engine.
 
@@ -110,7 +110,7 @@ Recommended setting right now: `APP_MODE=paper`.
 - Paper execution
   Use `APP_MODE=paper` with live trading still off. This is the correct place to validate sizing, slippage assumptions, and risk blocks.
 - Live execution
-  Use `APP_MODE=live` only after paper validation, and only with `ENABLE_LIVE_TRADING=true`. Live posting is still intentionally gated until signing and venue-specific execution are fully validated.
+  Use `APP_MODE=live` only after paper validation, and only with `ENABLE_LIVE_TRADING=true`. Real live posting now exists for single-leg `research_signal` opportunities when signer credentials are configured. Multi-leg strategies still remain paper/watch-only.
 
 ## Bankroll sources
 
@@ -120,6 +120,8 @@ Recommended setting right now: `APP_MODE=paper`.
   Optional explicit wallet address for venue balance sync. If omitted, the app falls back to `POLYMARKET_RELAYER_API_KEY_ADDRESS`.
 - `POLYMARKET_PROXY_WALLET`
   Optional override for the Polymarket proxy wallet. If omitted, the app will try to resolve the proxy wallet from Polymarket's public profile API.
+- `POLYMARKET_PRIVATE_KEY`
+  Required for authenticated live posting to the Polymarket CLOB API. This key is used only for signing live orders and should never be exposed in logs or API payloads.
 - In `paper` mode, risk sizing uses the simulated bankroll and the UI labels it clearly as `Simulated`.
 - In `live` mode, risk sizing uses the synced Polymarket venue cash balance and the UI labels it as `Venue-synced`.
 - The dashboard also shows venue positions value separately so you can see how much cash is available to deploy versus how much is already tied up on the venue.
@@ -156,10 +158,10 @@ This means you can collect data and evaluate forecast quality before enabling an
 - The `storage/KILL_SWITCH` file or the dashboard emergency stop blocks new trades.
 - Paper mode remains the recommended mode until fill-quality and slippage assumptions are validated with real data.
 
-## Paper-only until validated
+## Still paper-only until validated
 
-- Actual order signing and live posting to Polymarket
 - Emergency unwind using market orders
+- Multi-leg live posting for `sum_to_one` and `orderbook_arb`
 - Cross-market group execution with strict atomicity guarantees
 - Claude-driven discretionary trades
 - Automated config mutation by any model

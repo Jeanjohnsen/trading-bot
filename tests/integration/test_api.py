@@ -1,11 +1,13 @@
 import os
 
 from fastapi.testclient import TestClient
+from app.core.settings import get_settings
 
 
 def test_dashboard_and_core_api_routes_smoke() -> None:
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
     os.environ["ENABLE_RESEARCH_MODE"] = "true"
+    get_settings.cache_clear()
     from app.main import app
 
     with TestClient(app) as client:

@@ -14,5 +14,5 @@ class OrderRouter:
         if intent.mode is AppMode.PAPER:
             return await self.paper_broker.execute(intent, books)
         if intent.mode is AppMode.LIVE:
-            return await self.polymarket_client.post_limit_order(intent)
+            return await self.polymarket_client.post_limit_order(intent, books)
         return await self.paper_broker.execute(intent, books)

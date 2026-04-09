@@ -1,10 +1,12 @@
 import asyncio
+from dataclasses import dataclass
 
 import httpx
+import pytest
 
 from app.core.settings import Settings
 from app.data.market_ingestion import PolymarketMarketIngestion
-from app.domain.models import BankrollSource
+from app.domain.models import AppMode, BankrollSource, ExecutionIntent, OrderBookSnapshot, OrderLeg, PriceLevel
 from app.execution.polymarket_client import PolymarketClient
 
 
@@ -209,3 +211,133 @@ def test_polymarket_client_falls_back_across_polygon_rpcs(monkeypatch) -> None:
     assert snapshot.available_cash == 5.0
     assert rpc_attempts[0] == "https://polygon-rpc.com"
     assert len(rpc_attempts) >= 2
+
+
+@dataclass
+class FakeOrderArgs:
+    token_id: str
+    price: float
+    size: float
+    side: str
+
+
+class FakeOrderType:
+    GTC = "GTC"
+
+
+def test_polymarket_client_posts_single_leg_live_order_via_clob_client(monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeLiveClobClient:
+        def __init__(self, host, key=None, chain_id=None, signature_type=None, funder=None) -> None:
+            captured["init"] = {
+                "host": host,
+                "key": key,
+                "chain_id": chain_id,
+                "signature_type": signature_type,
+                "funder": funder,
+            }
+
+        def create_or_derive_api_creds(self):
+            captured["derived"] = True
+            return {"api_key": "derived"}
+
+        def set_api_creds(self, creds) -> None:
+            captured["creds"] = creds
+
+        def create_order(self, order_args):
+            captured["order_args"] = order_args
+            return {"signed": True, "order_args": order_args}
+
+        def post_order(self, signed_order, order_type):
+            captured["signed_order"] = signed_order
+            captured["order_type"] = order_type
+            return {"orderID": "live-order-123", "status": "accepted"}
+
+    monkeypatch.setattr(
+        PolymarketClient,
+        "_load_clob_client_components",
+        lambda self: (FakeLiveClobClient, FakeOrderArgs, FakeOrderType, "BUY"),
+        raising=False,
+    )
+
+    settings = Settings(
+        _env_file=None,
+        ENABLE_LIVE_TRADING=True,
+        POLYMARKET_PRIVATE_KEY="test-private-key",
+        POLYMARKET_RELAYER_API_KEY="test-relayer-key",
+        POLYMARKET_PROXY_WALLET="0x2222222222222222222222222222222222222222",
+    )
+    client = PolymarketClient(settings)
+
+    intent = ExecutionIntent(
+        opportunity_id="opp_live_1",
+        market_id="market_live_1",
+        mode=AppMode.LIVE,
+        legs=[OrderLeg(outcome="yes", side="buy", price=0.41, quantity=5.0, token_id="yes-token")],
+        notes="live research signal",
+    )
+    books = {
+        "market_live_1:yes": OrderBookSnapshot(
+            market_id="market_live_1",
+            token_id="yes-token",
+            outcome="yes",
+            tick_size=0.01,
+            asks=[PriceLevel(price=0.41, size=50.0)],
+        )
+    }
+
+    report = asyncio.run(client.post_limit_order(intent, books))
+
+    assert report.mode is AppMode.LIVE
+    assert report.order_id == "live-order-123"
+    assert report.status == "accepted"
+    assert captured["init"]["signature_type"] == 1
+    assert captured["init"]["funder"] == "0x2222222222222222222222222222222222222222"
+    assert captured["creds"] == {"api_key": "derived"}
+    assert captured["order_args"].token_id == "yes-token"
+    assert captured["order_args"].price == 0.41
+    assert captured["order_args"].size == 5.0
+    assert captured["order_args"].side == "BUY"
+    assert captured["order_type"] == FakeOrderType.GTC
+
+
+def test_polymarket_client_requires_private_key_for_live_posting() -> None:
+    settings = Settings(
+        _env_file=None,
+        ENABLE_LIVE_TRADING=True,
+        POLYMARKET_PRIVATE_KEY="",
+        POLYMARKET_RELAYER_API_KEY="test-relayer-key",
+    )
+    client = PolymarketClient(settings)
+    intent = ExecutionIntent(
+        opportunity_id="opp_live_2",
+        market_id="market_live_2",
+        mode=AppMode.LIVE,
+        legs=[OrderLeg(outcome="yes", side="buy", price=0.25, quantity=10.0, token_id="yes-token")],
+    )
+
+    with pytest.raises(RuntimeError, match="POLYMARKET_PRIVATE_KEY"):
+        asyncio.run(client.post_limit_order(intent, {}))
+
+
+def test_polymarket_client_rejects_multi_leg_live_intents() -> None:
+    settings = Settings(
+        _env_file=None,
+        ENABLE_LIVE_TRADING=True,
+        POLYMARKET_PRIVATE_KEY="test-private-key",
+        POLYMARKET_RELAYER_API_KEY="test-relayer-key",
+    )
+    client = PolymarketClient(settings)
+    intent = ExecutionIntent(
+        opportunity_id="opp_live_3",
+        market_id="market_live_3",
+        mode=AppMode.LIVE,
+        legs=[
+            OrderLeg(outcome="yes", side="buy", price=0.45, quantity=5.0, token_id="yes-token"),
+            OrderLeg(outcome="no", side="buy", price=0.55, quantity=5.0, token_id="no-token"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="single-leg"):
+        asyncio.run(client.post_limit_order(intent, {}))

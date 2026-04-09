@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     polymarket_relayer_api_key_address: str = Field(default="", alias="POLYMARKET_RELAYER_API_KEY_ADDRESS")
     polymarket_wallet_address: str = Field(default="", alias="POLYMARKET_WALLET_ADDRESS")
     polymarket_proxy_wallet: str = Field(default="", alias="POLYMARKET_PROXY_WALLET")
+    polymarket_private_key: str = Field(default="", alias="POLYMARKET_PRIVATE_KEY")
     polygon_rpc_url: str = Field(default="https://polygon-rpc.com", alias="POLYGON_RPC_URL")
 
     anthropic_api_url: str = Field(default="https://api.anthropic.com/v1/messages", alias="ANTHROPIC_API_URL")
