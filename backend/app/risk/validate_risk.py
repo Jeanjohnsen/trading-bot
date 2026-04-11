@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.domain.models import BankrollSource, AppMode, MarketQuote, OpportunityCandidate, PositionSummary, ProposedSize, RiskDecision
+from app.domain.models import BankrollSource, AppMode, MarketQuote, OpportunityCandidate, PositionSummary, ProposedSize, RiskDecision, StrategyType
 from app.risk.exposure_limits import current_total_exposure, exposure_by_category
 from app.risk.kelly_size import size_arbitrage_position
 
@@ -54,6 +54,11 @@ class RiskEngine:
         max_position_fraction = float(risk_cfg.get("max_position_bankroll_fraction", 0.05))
         fractional_kelly = float(risk_cfg.get("fractional_kelly", 0.25))
         estimated_ai_cost = float(risk_cfg.get("estimated_claude_cost_per_trade_usd", 0.0)) if self.claude_enabled else 0.0
+        strategy_min_net_edge = (
+            float(risk_cfg.get("research_signal_min_net_edge", min_net_edge))
+            if opportunity.strategy_type is StrategyType.RESEARCH_SIGNAL
+            else min_net_edge
+        )
 
         if self.kill_switch_active:
             blocked_by.append("kill_switch")
@@ -64,9 +69,9 @@ class RiskEngine:
         if mode is AppMode.LIVE and not state.venue_sync_ok:
             blocked_by.append("venue_balance_sync")
             reasons.append("Live bankroll could not be synced from Polymarket.")
-        if opportunity.net_edge < min_net_edge:
+        if opportunity.net_edge < strategy_min_net_edge:
             blocked_by.append("edge_threshold")
-            reasons.append(f"Net edge {opportunity.net_edge:.4f} is below threshold {min_net_edge:.4f}.")
+            reasons.append(f"Net edge {opportunity.net_edge:.4f} is below threshold {strategy_min_net_edge:.4f}.")
         if len(state.open_positions) >= max_positions:
             blocked_by.append("concurrency_limit")
             reasons.append("Maximum concurrent positions reached.")

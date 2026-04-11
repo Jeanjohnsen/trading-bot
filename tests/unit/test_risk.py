@@ -127,3 +127,25 @@ def test_trade_blocks_when_claude_cost_exceeds_projected_profit() -> None:
     )
     assert not decision.approved
     assert "ai_profitability" in decision.blocked_by
+
+
+def test_research_signal_uses_strategy_specific_net_edge_threshold() -> None:
+    runtime_config = sample_runtime_config()
+    runtime_config["risk"]["min_net_edge"] = 0.012
+    runtime_config["risk"]["research_signal_min_net_edge"] = 0.004
+    engine = RiskEngine(runtime_config, live_enabled=False, kill_switch_active=False)
+    opportunity = sample_opportunity()
+    opportunity.strategy_type = StrategyType.RESEARCH_SIGNAL
+    opportunity.net_edge = 0.005
+
+    decision = engine.evaluate(
+        opportunity,
+        sample_quote(),
+        RiskState(bankroll=1000.0),
+        AppMode.PAPER,
+        data_age_seconds=1,
+        estimated_slippage=0.005,
+    )
+
+    assert decision.approved
+    assert "edge_threshold" not in decision.blocked_by

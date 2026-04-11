@@ -48,6 +48,12 @@ def bullish_quote() -> MarketQuote:
     )
 
 
+def stale_bullish_quote() -> MarketQuote:
+    quote = bullish_quote()
+    quote.last_updated = datetime.now(UTC) - timedelta(minutes=5)
+    return quote
+
+
 def fresh_books(market_id: str) -> dict[str, OrderBookSnapshot]:
     return {
         f"{market_id}:yes": OrderBookSnapshot(
@@ -120,3 +126,24 @@ def test_build_execution_intent_uses_single_directional_leg_for_research_signal(
     assert intent.legs[0].side == "buy"
     assert intent.legs[0].price == 0.41
     assert intent.legs[0].quantity == 50.0
+
+
+def test_scanner_does_not_mark_research_signal_stale_from_market_updated_at() -> None:
+    config = sample_runtime_config(research_enabled=True)
+    config["risk"]["research_signal_min_net_edge"] = 0.004
+    scanner = ScannerService(config)
+    engine = RiskEngine(config, live_enabled=False, kill_switch_active=False)
+
+    opportunities = scanner.scan(
+        quotes=[stale_bullish_quote()],
+        books=fresh_books("research_market"),
+        mode=AppMode.PAPER,
+        risk_state=RiskState(bankroll=10_000),
+        risk_engine=engine,
+    )
+
+    research_signal = next((item for item in opportunities if item.strategy_type is StrategyType.RESEARCH_SIGNAL), None)
+
+    assert research_signal is not None
+    assert research_signal.risk is not None
+    assert "stale_data" not in research_signal.risk.blocked_by

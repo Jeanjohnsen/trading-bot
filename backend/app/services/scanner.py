@@ -75,7 +75,9 @@ class ScannerService:
         for opportunity in opportunities:
             quote = next((item for item in quotes if item.market_id == opportunity.market_id), quotes[0])
             if opportunity.strategy_type is StrategyType.RESEARCH_SIGNAL:
-                data_age = max((datetime.now(UTC) - quote.last_updated).total_seconds(), 0.0)
+                # Research signals are derived from the market snapshot we just fetched,
+                # so Gamma's upstream updatedAt should not make the signal look stale.
+                data_age = 0.0
             else:
                 data_age = self._data_age_seconds(opportunity.market_id, books)
             estimated_slippage = max(0.001, 0.012 - (opportunity.fill_confidence * 0.01))
