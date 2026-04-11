@@ -61,6 +61,11 @@ async def set_market_orders(payload: RuntimeTogglePayload, runtime: TradingRunti
     return await runtime.set_market_orders_enabled(payload.enabled)
 
 
+@router.post("/settings/auto-execute")
+async def set_auto_execute(payload: RuntimeTogglePayload, runtime: TradingRuntime = Depends(get_runtime)) -> dict:
+    return await runtime.set_auto_execute_enabled(payload.enabled)
+
+
 @router.post("/settings/trade-size")
 async def set_trade_size(payload: TradeSizePayload, runtime: TradingRuntime = Depends(get_runtime)) -> dict:
     return await runtime.set_trade_size_profile(payload.mode, payload.fraction)

@@ -6,6 +6,8 @@ app:
   enable_research_mode: false
   enable_live_trading: false
   enable_market_orders: false
+  enable_auto_execute: false
+  auto_execute_cooldown_seconds: 900
 scanner:
   refresh_seconds: 20
   max_markets: 80

@@ -20,6 +20,7 @@ def test_dashboard_and_core_api_routes_smoke() -> None:
         live_toggle = client.post("/settings/live-trading", json={"enabled": True})
         research_toggle = client.post("/settings/research-mode", json={"enabled": True})
         market_orders_toggle = client.post("/settings/market-orders", json={"enabled": True})
+        auto_execute_toggle = client.post("/settings/auto-execute", json={"enabled": True})
         trade_size = client.post("/settings/trade-size", json={"mode": "fixed", "fraction": 0.02})
         updated_health = client.get("/health")
         updated_settings = client.get("/settings")
@@ -34,6 +35,7 @@ def test_dashboard_and_core_api_routes_smoke() -> None:
         assert live_toggle.status_code == 200
         assert research_toggle.status_code == 200
         assert market_orders_toggle.status_code == 200
+        assert auto_execute_toggle.status_code == 200
         assert trade_size.status_code == 200
         assert mode_change.json()["mode"] == "backtest"
         assert updated_health.json()["mode"] == "backtest"
@@ -44,6 +46,7 @@ def test_dashboard_and_core_api_routes_smoke() -> None:
         assert updated_settings.json()["app"]["enable_live_trading"] is True
         assert updated_settings.json()["app"]["enable_research_mode"] is True
         assert updated_settings.json()["app"]["enable_market_orders"] is True
+        assert updated_settings.json()["app"]["enable_auto_execute"] is True
         assert updated_settings.json()["claude"]["operator_enabled"] is False
         assert updated_settings.json()["trade_sizing"]["global"]["fraction"] == 0.02
         assert analytics.json()["forecasting"]["tracked_markets"] > 0

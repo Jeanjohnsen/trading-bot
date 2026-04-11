@@ -1010,6 +1010,8 @@ function renderSettings() {
   const selectedMode = state.pendingAppMode || settings.current_mode || settings.app?.mode || "paper";
   const researchMinEdge = Number(settings.risk?.research_signal_min_net_edge ?? settings.risk?.min_net_edge ?? 0);
   const liveMinOrderNotional = Number(settings.risk?.live_min_order_notional_usd || 0);
+  const autoExecuteCooldownSeconds = Number(settings.app?.auto_execute_cooldown_seconds ?? 900);
+  const autoExecuteCooldownMinutes = Math.max(1, Math.round(autoExecuteCooldownSeconds / 60));
   byId("settings-panel").innerHTML = `
     <div class="stack">
       <div class="detail-block">
@@ -1050,6 +1052,11 @@ function renderSettings() {
           <div class="runtime-toggle-item">
             <div class="setting-line"><span>Live execution gate</span><strong>${settings.app?.enable_live_trading ? "Enabled" : "Blocked"}</strong></div>
             ${renderRuntimeToggleButtons("live-trading", settings.app?.enable_live_trading === true)}
+          </div>
+          <div class="runtime-toggle-item">
+            <div class="setting-line"><span>Auto execute</span><strong>${settings.app?.enable_auto_execute ? "Armed" : "Manual only"}</strong></div>
+            ${renderRuntimeToggleButtons("auto-execute", settings.app?.enable_auto_execute === true)}
+            <p class="detail-copy" style="margin-top:0.65rem;">When armed, the bot routes the top approved live research signal after each scan. Same-market re-entry is cooled down for about ${autoExecuteCooldownMinutes} minutes.</p>
           </div>
           <div class="runtime-toggle-item">
             <div class="setting-line"><span>Research assist</span><strong>${settings.app?.enable_research_mode ? "Enabled" : "Off"}</strong></div>

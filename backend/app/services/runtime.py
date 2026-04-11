@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import logging
 from collections import Counter
 
@@ -81,6 +81,7 @@ class TradingRuntime:
         self.live_trading_enabled: bool = bool(settings.enable_live_trading)
         self.research_mode_enabled: bool = bool(settings.enable_research_mode)
         self.market_orders_enabled: bool = bool(settings.enable_market_orders)
+        self.auto_execute_enabled: bool = bool(self.runtime_config.get("app", {}).get("enable_auto_execute", False))
         self.venue_account: AccountSnapshot = AccountSnapshot(
             source=BankrollSource.VENUE_UNAVAILABLE,
             label="Venue unavailable",
@@ -102,6 +103,8 @@ class TradingRuntime:
         self.runtime_config["app"]["enable_live_trading"] = self.live_trading_enabled
         self.runtime_config["app"]["enable_research_mode"] = self.research_mode_enabled
         self.runtime_config["app"]["enable_market_orders"] = self.market_orders_enabled
+        self.runtime_config["app"]["enable_auto_execute"] = self.auto_execute_enabled
+        self.runtime_config["app"].setdefault("auto_execute_cooldown_seconds", 900)
         self.polymarket_client.set_live_trading_enabled(self.live_trading_enabled)
         self.polymarket_client.set_market_orders_enabled(self.market_orders_enabled)
 
@@ -179,6 +182,12 @@ class TradingRuntime:
     def _trade_size_presets(self) -> list[float]:
         presets = self.runtime_config.get("risk", {}).get("trade_size_presets", [0.02, 0.05, 0.10])
         return [float(value) for value in presets]
+
+    def _auto_execute_cooldown_seconds(self) -> int:
+        raw_value = self.runtime_config.get("app", {}).get("auto_execute_cooldown_seconds", 900)
+        with suppress(TypeError, ValueError):
+            return max(0, int(raw_value))
+        return 900
 
     def _rescore_opportunities(self) -> None:
         risk_engine = RiskEngine(
@@ -267,6 +276,113 @@ class TradingRuntime:
         self.repository.save_market_snapshots(self.quotes)
         await self._sync_forecast_records()
         await self._refresh_agent_notes()
+        await self._maybe_auto_execute()
+
+    def _auto_execute_ready(self) -> bool:
+        return (
+            self.current_mode is AppMode.LIVE
+            and self.live_trading_enabled
+            and self.research_mode_enabled
+            and self.auto_execute_enabled
+            and not self.using_demo_data
+            and not self.kill_switch.is_active()
+            and self.venue_account.synced
+        )
+
+    def _has_open_position_in_market(self, market_id: str) -> bool:
+        return any(position.market_id == market_id and position.state != PositionState.CLOSED for position in self.positions)
+
+    @staticmethod
+    def _order_created_at(value: object) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        if isinstance(value, str):
+            with suppress(ValueError):
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        return None
+
+    def _iter_recent_live_orders(self, limit: int = 100) -> list[dict]:
+        rows: list[dict] = []
+        seen_ids: set[str] = set()
+        for order in self.orders:
+            if order.mode is not AppMode.LIVE:
+                continue
+            rows.append(
+                {
+                    "order_id": order.order_id,
+                    "market_id": order.market_id,
+                    "mode": order.mode.value,
+                    "status": order.status,
+                    "created_at": order.created_at,
+                }
+            )
+            seen_ids.add(order.order_id)
+        with suppress(Exception):
+            for row in self.repository.list_orders(limit=limit):
+                order_id = str(row.get("order_id") or "")
+                if row.get("mode") != AppMode.LIVE.value or (order_id and order_id in seen_ids):
+                    continue
+                rows.append(row)
+        return rows
+
+    def _has_recent_live_order(self, market_id: str, now: datetime) -> bool:
+        cooldown_seconds = self._auto_execute_cooldown_seconds()
+        if cooldown_seconds <= 0:
+            return False
+        cutoff = now - timedelta(seconds=cooldown_seconds)
+        suppressing_statuses = {"accepted", "open", "partial", "filled", "matched", "executing"}
+        for row in self._iter_recent_live_orders():
+            if row.get("market_id") != market_id:
+                continue
+            if str(row.get("status") or "").lower() not in suppressing_statuses:
+                continue
+            created_at = self._order_created_at(row.get("created_at"))
+            if created_at and created_at >= cutoff:
+                return True
+        return False
+
+    def _next_auto_execute_candidate(self) -> OpportunityCandidate | None:
+        now = datetime.now(UTC)
+        for opportunity in self.opportunities:
+            if opportunity.strategy_type is not StrategyType.RESEARCH_SIGNAL:
+                continue
+            if opportunity.status.value != "approved":
+                continue
+            if not opportunity.risk or not opportunity.risk.approved:
+                continue
+            if self._has_open_position_in_market(opportunity.market_id):
+                continue
+            if self._has_recent_live_order(opportunity.market_id, now):
+                continue
+            return opportunity
+        return None
+
+    async def _maybe_auto_execute(self) -> None:
+        if not self._auto_execute_ready():
+            return
+        candidate = self._next_auto_execute_candidate()
+        if not candidate:
+            return
+        try:
+            await self.execute_opportunity(candidate.opportunity_id)
+        except Exception as exc:
+            logger.warning(
+                "auto execution failed",
+                extra={
+                    "event": "auto_execution_failed",
+                    "opportunity_id": candidate.opportunity_id,
+                    "market_id": candidate.market_id,
+                    "error_message": str(exc),
+                },
+            )
+            await self.notifications.dispatch(
+                NotificationMessage(
+                    level=NotificationLevel.WARNING,
+                    title="Auto execution failed",
+                    body=str(exc),
+                )
+            )
 
     async def _sync_forecast_records(self) -> None:
         if self.research_mode_enabled:
@@ -456,6 +572,8 @@ class TradingRuntime:
         elif key == "enable_market_orders":
             self.market_orders_enabled = bool(enabled)
             self.polymarket_client.set_market_orders_enabled(enabled)
+        elif key == "enable_auto_execute":
+            self.auto_execute_enabled = bool(enabled)
 
         if previous != bool(enabled):
             self.repository.save_config_change(
@@ -484,6 +602,9 @@ class TradingRuntime:
 
     async def set_market_orders_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
         return await self._set_app_runtime_flag("enable_market_orders", enabled, actor)
+
+    async def set_auto_execute_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
+        return await self._set_app_runtime_flag("enable_auto_execute", enabled, actor)
 
     async def set_claude_agent_enabled(self, enabled: bool, actor: str = "dashboard") -> dict:
         previous_enabled = self.claude_client.operator_enabled
@@ -670,6 +791,7 @@ class TradingRuntime:
                 "live_execution_enabled": self.live_trading_enabled,
                 "research_mode_enabled": self.research_mode_enabled,
                 "market_orders_enabled": self.market_orders_enabled,
+                "auto_execute_enabled": self.auto_execute_enabled,
                 "claude_enabled": self.claude_client.enabled,
                 "venue_synced": self.venue_account.synced,
                 "venue_cash": self.venue_account.available_cash,
