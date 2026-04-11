@@ -56,3 +56,36 @@ def test_dashboard_and_core_api_routes_smoke() -> None:
                 json={"mode": "fixed", "fraction": 0.05},
             )
             assert override.status_code == 200
+
+
+def test_execute_route_surfaces_runtime_errors(monkeypatch) -> None:
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["ENABLE_RESEARCH_MODE"] = "true"
+    get_settings.cache_clear()
+    from app.main import app
+
+    with TestClient(app) as client:
+        async def fail_execute(opportunity_id: str):  # noqa: ARG001
+            raise RuntimeError("Request exception!")
+
+        monkeypatch.setattr(app.state.runtime, "execute_opportunity", fail_execute)
+
+        response = client.post("/opportunities/opp_test/execute")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == "Request exception!"
+
+
+def test_research_threshold_route_updates_runtime_risk_config() -> None:
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["ENABLE_RESEARCH_MODE"] = "true"
+    get_settings.cache_clear()
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.post("/settings/research-thresholds", json={"research_signal_min_net_edge": 0.003})
+        settings = client.get("/settings")
+
+        assert response.status_code == 200
+        assert response.json()["research_signal_min_net_edge"] == 0.003
+        assert settings.json()["risk"]["research_signal_min_net_edge"] == 0.003

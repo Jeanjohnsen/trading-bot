@@ -27,6 +27,10 @@ class TradeSizePayload(BaseModel):
     fraction: float | None = None
 
 
+class ResearchThresholdPayload(BaseModel):
+    research_signal_min_net_edge: float
+
+
 @router.get("/settings")
 def settings(runtime: TradingRuntime = Depends(get_runtime)) -> dict:
     return runtime.get_settings_view()
@@ -60,3 +64,8 @@ async def set_market_orders(payload: RuntimeTogglePayload, runtime: TradingRunti
 @router.post("/settings/trade-size")
 async def set_trade_size(payload: TradeSizePayload, runtime: TradingRuntime = Depends(get_runtime)) -> dict:
     return await runtime.set_trade_size_profile(payload.mode, payload.fraction)
+
+
+@router.post("/settings/research-thresholds")
+async def set_research_thresholds(payload: ResearchThresholdPayload, runtime: TradingRuntime = Depends(get_runtime)) -> dict:
+    return await runtime.set_research_thresholds(payload.research_signal_min_net_edge)

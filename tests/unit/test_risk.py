@@ -16,6 +16,7 @@ def sample_runtime_config() -> dict:
             "slippage_tolerance": 0.01,
             "min_liquidity_score": 0.30,
             "api_budget_daily_usd": 12.0,
+            "live_min_order_notional_usd": 1.0,
             "max_position_bankroll_fraction": 0.05,
             "fractional_kelly": 0.25,
             "estimated_claude_cost_per_trade_usd": 0.02,
@@ -149,3 +150,109 @@ def test_research_signal_uses_strategy_specific_net_edge_threshold() -> None:
 
     assert decision.approved
     assert "edge_threshold" not in decision.blocked_by
+
+
+def test_live_research_signal_is_raised_to_venue_order_minimum_when_possible() -> None:
+    engine = RiskEngine(sample_runtime_config(), live_enabled=True, kill_switch_active=False)
+    opportunity = sample_opportunity()
+    opportunity.strategy_type = StrategyType.RESEARCH_SIGNAL
+
+    decision = engine.evaluate(
+        opportunity,
+        sample_quote(),
+        RiskState(bankroll=1000.0, bankroll_source=BankrollSource.VENUE_SYNCED, venue_sync_ok=True),
+        AppMode.LIVE,
+        data_age_seconds=1,
+        estimated_slippage=0.005,
+        operator_fraction_override=0.0005,
+        size_source="manual",
+    )
+
+    assert decision.approved
+    assert "order_minimum" not in decision.blocked_by
+    assert decision.sizing.notional == 1.0
+    assert decision.sizing.minimum_notional == 1.0
+    assert decision.sizing.raised_to_minimum is True
+
+
+def test_live_research_signal_can_clear_order_minimum_above_modeled_capacity_when_bankroll_allows() -> None:
+    engine = RiskEngine(sample_runtime_config(), live_enabled=True, kill_switch_active=False)
+    opportunity = sample_opportunity()
+    opportunity.strategy_type = StrategyType.RESEARCH_SIGNAL
+    opportunity.capital_at_risk = 0.3
+    opportunity.executable_size = 1.0
+    opportunity.expected_profit = 0.03
+
+    decision = engine.evaluate(
+        opportunity,
+        sample_quote(),
+        RiskState(bankroll=1000.0, bankroll_source=BankrollSource.VENUE_SYNCED, venue_sync_ok=True),
+        AppMode.LIVE,
+        data_age_seconds=1,
+        estimated_slippage=0.005,
+        operator_fraction_override=0.0005,
+        size_source="manual",
+    )
+
+    assert decision.approved
+    assert "order_minimum" not in decision.blocked_by
+    assert decision.sizing.notional == 1.0
+    assert decision.sizing.minimum_notional == 1.0
+    assert decision.sizing.max_notional == 1.0
+
+
+def test_live_research_signal_blocks_when_order_minimum_exceeds_size_cap() -> None:
+    runtime_config = sample_runtime_config()
+    runtime_config["risk"]["max_position_bankroll_fraction"] = 0.05
+    engine = RiskEngine(runtime_config, live_enabled=True, kill_switch_active=False)
+    opportunity = sample_opportunity()
+    opportunity.strategy_type = StrategyType.RESEARCH_SIGNAL
+    opportunity.capital_at_risk = 0.5
+    opportunity.executable_size = 1.0
+    opportunity.expected_profit = 0.02
+
+    decision = engine.evaluate(
+        opportunity,
+        sample_quote(),
+        RiskState(bankroll=10.0, bankroll_source=BankrollSource.VENUE_SYNCED, venue_sync_ok=True),
+        AppMode.LIVE,
+        data_age_seconds=1,
+        estimated_slippage=0.005,
+        operator_fraction_override=0.0005,
+        size_source="manual",
+    )
+
+    assert not decision.approved
+    assert "order_minimum" in decision.blocked_by
+    assert decision.sizing.notional == 0.5
+    assert decision.sizing.minimum_notional == 1.0
+    assert decision.sizing.max_notional == 0.5
+    assert any("at least $1.00" in reason for reason in decision.reasons)
+
+
+def test_live_exposure_limit_uses_sized_notional_not_full_opportunity_capacity() -> None:
+    engine = RiskEngine(sample_runtime_config(), live_enabled=True, kill_switch_active=False)
+    opportunity = sample_opportunity()
+    opportunity.strategy_type = StrategyType.RESEARCH_SIGNAL
+    opportunity.capital_at_risk = 15.0
+    opportunity.executable_size = 30.0
+
+    decision = engine.evaluate(
+        opportunity,
+        sample_quote(),
+        RiskState(
+            bankroll=20.0,
+            bankroll_source=BankrollSource.VENUE_SYNCED,
+            venue_sync_ok=True,
+            external_position_value=6.5,
+        ),
+        AppMode.LIVE,
+        data_age_seconds=1,
+        estimated_slippage=0.005,
+        operator_fraction_override=0.0005,
+        size_source="manual",
+    )
+
+    assert decision.approved
+    assert "exposure_limit" not in decision.blocked_by
+    assert decision.sizing.notional == 1.0

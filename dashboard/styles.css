@@ -796,6 +796,37 @@ h2 {
   margin-top: 0.85rem;
 }
 
+.settings-inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: end;
+  margin-top: 0.85rem;
+}
+
+.settings-field {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.settings-input {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 0.8rem 0.95rem;
+  font: inherit;
+  outline: none;
+}
+
+.settings-input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(97, 231, 206, 0.12);
+}
+
 .execution-note {
   margin-top: 0.85rem;
 }
@@ -891,7 +922,8 @@ h2 {
   .overview-grid,
   .workspace-columns,
   .detail-grid,
-  .execution-metric-grid {
+  .execution-metric-grid,
+  .settings-inline-form {
     grid-template-columns: 1fr;
   }
 

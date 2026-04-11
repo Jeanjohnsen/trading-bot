@@ -27,6 +27,8 @@ async def execute_opportunity(opportunity_id: str, runtime: TradingRuntime = Dep
         return report.model_dump(mode="json")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/opportunities/{opportunity_id}/trade-size")

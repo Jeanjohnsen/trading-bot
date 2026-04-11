@@ -128,6 +128,42 @@ def test_build_execution_intent_uses_single_directional_leg_for_research_signal(
     assert intent.legs[0].quantity == 50.0
 
 
+def test_build_execution_intent_live_research_signal_uses_target_notional_even_above_modeled_size() -> None:
+    quote = bullish_quote()
+    opportunity = OpportunityCandidate(
+        strategy_type=StrategyType.RESEARCH_SIGNAL,
+        market_id=quote.market_id,
+        question=quote.question,
+        category=quote.category,
+        gross_edge=0.06,
+        net_edge=0.05,
+        fill_adjusted_edge=0.04,
+        depth_weighted_edge=0.04,
+        expected_profit=0.05,
+        capital_at_risk=0.41,
+        executable_size=1.0,
+        fill_confidence=0.8,
+        liquidity_score=0.8,
+        expected_holding_minutes=90.0,
+        rationale="Research forecast expects YES to outperform the current market price.",
+        evidence={"direction": "yes"},
+    )
+
+    intent = build_execution_intent(
+        opportunity=opportunity,
+        quote=quote,
+        mode=AppMode.LIVE,
+        notes="live research trade",
+        target_notional=1.0,
+    )
+
+    assert len(intent.legs) == 1
+    assert intent.legs[0].outcome == "yes"
+    assert intent.legs[0].side == "buy"
+    assert intent.legs[0].price == 0.41
+    assert abs(intent.legs[0].quantity - (1.0 / 0.41)) < 1e-9
+
+
 def test_scanner_does_not_mark_research_signal_stale_from_market_updated_at() -> None:
     config = sample_runtime_config(research_enabled=True)
     config["risk"]["research_signal_min_net_edge"] = 0.004

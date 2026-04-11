@@ -24,7 +24,10 @@ def build_execution_intent(
             entry_price = quote.yes_ask or quote.yes_price
             token_id = quote.yes_token_id
 
-        quantity = _bounded_quantity(target_notional, entry_price, opportunity.executable_size)
+        if mode is AppMode.LIVE:
+            quantity = max(1.0, target_notional / max(entry_price, 1e-6))
+        else:
+            quantity = _bounded_quantity(target_notional, entry_price, opportunity.executable_size)
         legs = [
             OrderLeg(
                 outcome=direction,

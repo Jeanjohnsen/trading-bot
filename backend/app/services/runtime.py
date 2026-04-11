@@ -519,6 +519,30 @@ class TradingRuntime:
             await self._refresh_agent_notes()
         return self.get_settings_view()["trade_sizing"]
 
+    async def set_research_thresholds(self, research_signal_min_net_edge: float, actor: str = "dashboard") -> dict:
+        risk_cfg = self.runtime_config.setdefault("risk", {})
+        previous = float(risk_cfg.get("research_signal_min_net_edge", risk_cfg.get("min_net_edge", 0.015)))
+        current = max(0.0, float(research_signal_min_net_edge))
+        risk_cfg["research_signal_min_net_edge"] = current
+
+        if abs(previous - current) > 1e-9:
+            self.repository.save_config_change(
+                actor=actor,
+                key="risk.research_signal_min_net_edge",
+                previous_value=str(previous),
+                new_value=str(current),
+            )
+            await self.notifications.dispatch(
+                NotificationMessage(
+                    level=NotificationLevel.INFO,
+                    title="Research threshold changed",
+                    body=f"research_signal_min_net_edge changed from {previous} to {current}.",
+                )
+            )
+            self._rescore_opportunities()
+            await self._refresh_agent_notes()
+        return self.get_settings_view()["risk"]
+
     async def set_opportunity_trade_size(
         self,
         opportunity_id: str,

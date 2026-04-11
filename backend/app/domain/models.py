@@ -187,6 +187,10 @@ class ProposedSize(BaseModel):
     estimated_profit: float = 0.0
     estimated_ai_cost: float = 0.0
     estimated_profit_after_ai_cost: float = 0.0
+    minimum_notional: float = 0.0
+    max_notional: float = 0.0
+    meets_minimum_notional: bool = True
+    raised_to_minimum: bool = False
 
 
 class RiskDecision(BaseModel):

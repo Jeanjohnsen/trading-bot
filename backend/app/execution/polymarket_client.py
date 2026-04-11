@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 import logging
 from typing import Any
@@ -42,6 +43,22 @@ def _round_to_tick(price: float, tick_size: float) -> float:
     precision = _price_precision(tick_size)
     scaled = round(price / tick_size)
     return round(scaled * tick_size, precision)
+
+
+def _configure_clob_http_client() -> None:
+    try:
+        from py_clob_client.http_helpers import helpers as http_helpers
+    except ImportError:
+        return
+
+    current_client = getattr(http_helpers, "_http_client", None)
+    if getattr(current_client, "_trust_env", True) is False:
+        return
+
+    with suppress(Exception):
+        if current_client is not None:
+            current_client.close()
+    http_helpers._http_client = httpx.Client(http2=True, trust_env=False)
 
 
 class PolymarketClient:
@@ -182,6 +199,7 @@ class PolymarketClient:
 
     def _load_clob_client_components(self) -> tuple[Any, Any, Any, Any]:
         try:
+            _configure_clob_http_client()
             from py_clob_client.client import ClobClient
             from py_clob_client.clob_types import OrderArgs, OrderType
             from py_clob_client.order_builder.constants import BUY
@@ -302,5 +320,8 @@ class PolymarketClient:
             side=BUY,
         )
         signed_order = clob_client.create_order(order_args)
-        response = clob_client.post_order(signed_order, OrderType.GTC)
+        try:
+            response = clob_client.post_order(signed_order, OrderType.GTC)
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
         return self._normalize_live_order_report(intent, response)

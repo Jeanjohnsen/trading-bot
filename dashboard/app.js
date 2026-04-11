@@ -752,6 +752,8 @@ function renderMarketDetail() {
   const estimatedProfitAfterAi = Number(
     risk.sizing?.estimated_profit_after_ai_cost ?? scaledExpectedProfit - estimatedAiCost
   );
+  const minimumNotional = Number(risk.sizing?.minimum_notional || risk.metrics?.live_min_order_notional_usd || 0);
+  const raisedToMinimum = risk.sizing?.raised_to_minimum === true;
   const isCrossMarket = selected.strategy_type === "cross_market_arb";
   const isResearchSignal = selected.strategy_type === "research_signal";
   const groupedProbability = Number(selected.evidence?.summed_yes_probability || 0);
@@ -818,6 +820,15 @@ function renderMarketDetail() {
       value: formatPercent(balanceUsage),
       meta: "Of active bankroll",
     },
+    ...(minimumNotional > 0
+      ? [
+          {
+            label: "Venue minimum",
+            value: formatMoney(minimumNotional),
+            meta: raisedToMinimum ? "Raised automatically" : "Per live order",
+          },
+        ]
+      : []),
     {
       label: "Expected profit",
       value: formatMoney(scaledExpectedProfit),
@@ -859,7 +870,7 @@ function renderMarketDetail() {
             ${executionMetrics}
           </div>
           ${tradeSizeButtons}
-          <p class="detail-copy execution-note">${formatTradeSizeSource(tradeSizeSource)} is active. ${bankrollDescriptor} bankroll is driving sizing for this trade.${requestedFraction > cappedFraction ? ` Requested ${formatPercent(requestedFraction)} is clipped to the hard cap ${formatPercent(cappedFraction)}.` : ""}${estimatedAiCost > 0 ? ` Claude cost floor: ${formatMoney(estimatedAiCost)}.` : ""}</p>
+          <p class="detail-copy execution-note">${formatTradeSizeSource(tradeSizeSource)} is active. ${bankrollDescriptor} bankroll is driving sizing for this trade.${requestedFraction > cappedFraction ? ` Requested ${formatPercent(requestedFraction)} is clipped to the hard cap ${formatPercent(cappedFraction)}.` : ""}${minimumNotional > 0 ? ` Live orders must clear ${formatMoney(minimumNotional)}.${raisedToMinimum ? " This size was lifted automatically to clear that floor." : ""}` : ""}${estimatedAiCost > 0 ? ` Claude cost floor: ${formatMoney(estimatedAiCost)}.` : ""}</p>
         </div>
         <div class="detail-block">
           <div class="eyebrow">Risk verdict</div>
@@ -997,6 +1008,8 @@ function renderSettings() {
   const tradeSizing = settings.trade_sizing || {};
   const globalTradeSize = tradeSizing.global || { mode: "auto", fraction: null };
   const selectedMode = state.pendingAppMode || settings.current_mode || settings.app?.mode || "paper";
+  const researchMinEdge = Number(settings.risk?.research_signal_min_net_edge ?? settings.risk?.min_net_edge ?? 0);
+  const liveMinOrderNotional = Number(settings.risk?.live_min_order_notional_usd || 0);
   byId("settings-panel").innerHTML = `
     <div class="stack">
       <div class="detail-block">
@@ -1006,7 +1019,9 @@ function renderSettings() {
         <div class="setting-line"><span>Demo data active</span><strong>${settings.using_demo_data ? "Yes" : "No"}</strong></div>
         <div class="setting-line"><span>Bankroll source</span><strong>${formatBankrollSource(activeAccount.source)}</strong></div>
         <div class="setting-line"><span>Refresh</span><strong>${settings.scanner?.refresh_seconds || 0}s</strong></div>
-        <div class="setting-line"><span>Min net edge</span><strong>${formatPercent(settings.risk?.min_net_edge || 0)}</strong></div>
+        <div class="setting-line"><span>Base min edge</span><strong>${formatPercent(settings.risk?.min_net_edge || 0)}</strong></div>
+        <div class="setting-line"><span>Research min edge</span><strong>${formatPercent(researchMinEdge)}</strong></div>
+        <div class="setting-line"><span>Live order minimum</span><strong>${formatMoney(liveMinOrderNotional)}</strong></div>
       </div>
       <div class="detail-block">
         <div class="eyebrow">App mode</div>
@@ -1028,7 +1043,7 @@ function renderSettings() {
         }
         ${
           settings.current_mode === "live" && settings.app?.enable_live_trading === true
-            ? `<p class="detail-copy" style="margin-top:0.7rem;">Live mode and the gate are enabled, but venue posting is still signer-gated in this MVP. Research and arb signals will surface here, but actual Polymarket posting remains blocked until wallet signing is validated.</p>`
+            ? `<p class="detail-copy" style="margin-top:0.7rem;">Live mode and the gate are enabled. Approved research signals can route live now, while multi-leg arb strategies still stay watch-only until atomic routing lands.</p>`
             : ""
         }
         <div class="runtime-toggle-stack">
@@ -1046,6 +1061,21 @@ function renderSettings() {
             <p class="detail-copy" style="margin-top:0.65rem;">Keep this off unless you explicitly want emergency-style liquidity taking later.</p>
           </div>
         </div>
+      </div>
+      <div class="detail-block">
+        <div class="eyebrow">Research threshold</div>
+        <div class="setting-line"><span>Current floor</span><strong>${formatPercent(researchMinEdge)}</strong></div>
+        <div class="layout-button-row threshold-pill-row" style="margin-top:0.85rem;">
+          ${[0.003, 0.004, 0.005].map((value) => `<button class="layout-pill-button ${Math.abs(researchMinEdge - value) < 0.0001 ? "active" : ""}" type="button" data-research-threshold="${value}">${formatPercent(value)}</button>`).join("")}
+        </div>
+        <div class="settings-inline-form">
+          <label class="settings-field" for="research-threshold-input">
+            <span>Custom decimal edge</span>
+            <input class="settings-input" id="research-threshold-input" type="number" min="0" step="0.001" value="${researchMinEdge.toFixed(3)}" />
+          </label>
+          <button class="action-button" id="research-threshold-save" type="button">Apply</button>
+        </div>
+        <p class="detail-copy" style="margin-top:0.75rem;">Runtime only. Applies immediately without restart. 0.004 means a 0.4% net-edge floor for research signals.</p>
       </div>
       <div class="detail-block">
         <div class="eyebrow">Presets</div>
@@ -1118,6 +1148,19 @@ function renderSettings() {
       await setRuntimeToggle(setting, enabled);
     });
   });
+  document.querySelectorAll("[data-research-threshold]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      await setResearchThreshold(Number(node.dataset.researchThreshold));
+    });
+  });
+  const researchThresholdSave = byId("research-threshold-save");
+  if (researchThresholdSave) {
+    researchThresholdSave.addEventListener("click", async () => {
+      const input = byId("research-threshold-input");
+      const value = Number(input?.value);
+      await setResearchThreshold(value);
+    });
+  }
   const toggleClaudeButton = byId("toggle-claude-button");
   if (toggleClaudeButton) {
     toggleClaudeButton.addEventListener("click", toggleClaudeAgent);
@@ -1149,7 +1192,7 @@ function renderOrders() {
                 `
               )
               .join("")
-          : `<div class="empty">No orders yet. Approved opportunities can be paper-executed from the detail panel.</div>`
+          : `<div class="empty">No orders yet. Approved opportunities can be executed from the detail panel.</div>`
       }
     </div>
   `;
@@ -1311,6 +1354,15 @@ async function toggleClaudeAgent() {
 async function setRuntimeToggle(setting, enabled) {
   if (!setting) return;
   await fetchJson(`/settings/${setting}`, { method: "POST", body: JSON.stringify({ enabled }) });
+  await loadDashboard();
+}
+
+async function setResearchThreshold(researchSignalMinNetEdge) {
+  if (!Number.isFinite(researchSignalMinNetEdge) || researchSignalMinNetEdge < 0) return;
+  await fetchJson("/settings/research-thresholds", {
+    method: "POST",
+    body: JSON.stringify({ research_signal_min_net_edge: researchSignalMinNetEdge }),
+  });
   await loadDashboard();
 }
 

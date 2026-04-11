@@ -54,6 +54,11 @@ class RiskEngine:
         max_position_fraction = float(risk_cfg.get("max_position_bankroll_fraction", 0.05))
         fractional_kelly = float(risk_cfg.get("fractional_kelly", 0.25))
         estimated_ai_cost = float(risk_cfg.get("estimated_claude_cost_per_trade_usd", 0.0)) if self.claude_enabled else 0.0
+        live_min_order_notional = (
+            float(risk_cfg.get("live_min_order_notional_usd", 1.0))
+            if mode is AppMode.LIVE and opportunity.strategy_type is StrategyType.RESEARCH_SIGNAL
+            else 0.0
+        )
         strategy_min_net_edge = (
             float(risk_cfg.get("research_signal_min_net_edge", min_net_edge))
             if opportunity.strategy_type is StrategyType.RESEARCH_SIGNAL
@@ -94,11 +99,6 @@ class RiskEngine:
             blocked_by.append("api_budget")
             reasons.append("AI/API budget exhausted for today.")
 
-        new_total_exposure = current_total_exposure(state.open_positions) + state.external_position_value + opportunity.capital_at_risk
-        if new_total_exposure > total_exposure_limit:
-            blocked_by.append("exposure_limit")
-            reasons.append("Trade would breach total exposure cap.")
-
         category_exposure = exposure_by_category(state.open_positions)
         concentration_penalty = category_exposure.get(quote.category, 0.0) / max(state.bankroll, 1.0)
         sizing = size_arbitrage_position(
@@ -110,11 +110,22 @@ class RiskEngine:
             operator_fraction_override=operator_fraction_override,
             size_source=size_source,
             estimated_ai_cost=estimated_ai_cost,
+            minimum_notional=live_min_order_notional,
         )
 
         if sizing.capped_fraction <= 0:
             blocked_by.append("sizing")
             reasons.append("Sizing engine produced zero allowable notional.")
+        new_total_exposure = current_total_exposure(state.open_positions) + state.external_position_value + sizing.notional
+        if new_total_exposure > total_exposure_limit:
+            blocked_by.append("exposure_limit")
+            reasons.append("Trade would breach total exposure cap.")
+        if live_min_order_notional > 0 and not sizing.meets_minimum_notional:
+            blocked_by.append("order_minimum")
+            reasons.append(
+                f"Venue requires at least ${live_min_order_notional:.2f} notional for this live order, "
+                f"but deterministic caps allow only ${sizing.max_notional:.2f}."
+            )
         if estimated_ai_cost > 0 and sizing.estimated_profit_after_ai_cost <= 0:
             blocked_by.append("ai_profitability")
             reasons.append(
@@ -137,6 +148,9 @@ class RiskEngine:
                 "category_exposure_fraction": round(concentration_penalty, 4),
                 "size_source": sizing.size_source,
                 "estimated_ai_cost": round(estimated_ai_cost, 4),
+                "live_min_order_notional_usd": round(live_min_order_notional, 4),
+                "max_notional": sizing.max_notional,
+                "raised_to_minimum": sizing.raised_to_minimum,
             },
             sizing=sizing if isinstance(sizing, ProposedSize) else ProposedSize(),
         )

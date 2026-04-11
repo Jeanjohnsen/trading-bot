@@ -31,4 +31,3 @@ System prompt goals:
 - point to the most likely root cause
 - suggest deterministic mitigations
 - avoid policy-violating "just override the guardrail" recommendations
-

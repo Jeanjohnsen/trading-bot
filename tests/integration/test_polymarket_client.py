@@ -341,3 +341,62 @@ def test_polymarket_client_rejects_multi_leg_live_intents() -> None:
 
     with pytest.raises(RuntimeError, match="single-leg"):
         asyncio.run(client.post_limit_order(intent, {}))
+
+
+def test_polymarket_client_disables_env_proxies_for_clob_http_client(monkeypatch) -> None:
+    from py_clob_client.http_helpers import helpers as http_helpers
+
+    proxy_bound_client = httpx.Client(http2=True)
+    monkeypatch.setattr(http_helpers, "_http_client", proxy_bound_client)
+
+    client = PolymarketClient(Settings(_env_file=None))
+    client._load_clob_client_components()
+
+    configured_client = http_helpers._http_client
+    assert configured_client is not proxy_bound_client
+    assert getattr(configured_client, "_trust_env", None) is False
+
+    configured_client.close()
+
+
+def test_polymarket_client_wraps_exchange_post_errors(monkeypatch) -> None:
+    class FakeLiveClobClient:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        def create_or_derive_api_creds(self):
+            return {"api_key": "derived"}
+
+        def set_api_creds(self, creds) -> None:  # noqa: ARG002
+            return None
+
+        def create_order(self, order_args):  # noqa: ARG002
+            return {"signed": True}
+
+        def post_order(self, signed_order, order_type):  # noqa: ARG002
+            raise ValueError("exchange rejected order")
+
+    monkeypatch.setattr(
+        PolymarketClient,
+        "_load_clob_client_components",
+        lambda self: (FakeLiveClobClient, FakeOrderArgs, FakeOrderType, "BUY"),
+        raising=False,
+    )
+
+    settings = Settings(
+        _env_file=None,
+        ENABLE_LIVE_TRADING=True,
+        POLYMARKET_PRIVATE_KEY="test-private-key",
+        POLYMARKET_RELAYER_API_KEY="test-relayer-key",
+        POLYMARKET_PROXY_WALLET="0x2222222222222222222222222222222222222222",
+    )
+    client = PolymarketClient(settings)
+    intent = ExecutionIntent(
+        opportunity_id="opp_live_4",
+        market_id="market_live_4",
+        mode=AppMode.LIVE,
+        legs=[OrderLeg(outcome="yes", side="buy", price=0.41, quantity=5.0, token_id="yes-token")],
+    )
+
+    with pytest.raises(RuntimeError, match="exchange rejected order"):
+        asyncio.run(client.post_limit_order(intent, {}))
